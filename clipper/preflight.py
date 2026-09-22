@@ -12,6 +12,15 @@ class PreflightError(RuntimeError):
     """A required external tool is missing or unusable."""
 
 
+class _FfmpegRunError(RuntimeError):
+    """Internal signal: the binary ran but exited non-zero (not a libass issue)."""
+
+    def __init__(self, returncode: int, output: str) -> None:
+        super().__init__(f"ffmpeg exited with code {returncode}")
+        self.returncode = returncode
+        self.output = output
+
+
 @dataclass(frozen=True)
 class Preflight:
     ffmpeg: Path
@@ -24,6 +33,11 @@ def find_binary(name: str, env_var: str) -> Path:
         candidate = Path(override)
         if candidate.exists():
             return candidate
+        raise PreflightError(
+            f"{env_var} is set to '{override}' but that path does not exist. "
+            f"Fix {env_var} to point at your {name} binary, or unset it to fall "
+            f"back to PATH."
+        )
     found = shutil.which(name)
     if found:
         return Path(found)
@@ -41,11 +55,23 @@ def _run_filters(ffmpeg: Path) -> str:
         text=True,
         check=False,
     )
-    return result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    if result.returncode != 0:
+        raise _FfmpegRunError(result.returncode, output)
+    return output
 
 
 def has_subtitles_filter(ffmpeg: Path) -> bool:
-    return re.search(r"^\s*\S+\s+subtitles\s", _run_filters(ffmpeg), re.MULTILINE) is not None
+    try:
+        output = _run_filters(ffmpeg)
+    except _FfmpegRunError as exc:
+        excerpt = exc.output.strip()[-500:]
+        raise PreflightError(
+            f"{ffmpeg} exited with code {exc.returncode} while listing filters. "
+            f"The binary itself failed to run; check that it is valid and "
+            f"executable for this platform. Output excerpt: {excerpt!r}"
+        ) from exc
+    return re.search(r"^\s*\S+\s+subtitles\s", output, re.MULTILINE) is not None
 
 
 def preflight(require_subtitles: bool = True) -> Preflight:
