@@ -26,7 +26,7 @@ def _fill_timings(words: list[dict], seg_start: float, seg_end: float) -> list[d
         nxt = min((k for k in known if k > i), default=None)
         lo = filled[prev]["end"] if prev is not None else seg_start
         hi = filled[nxt]["start"] if nxt is not None else seg_end
-        gap = [j for j in range(len(filled)) if "start" not in filled[j]
+        gap = [j for j in range(len(filled)) if j not in known
                and (prev is None or j > prev) and (nxt is None or j < nxt)]
         share = (hi - lo) / max(1, len(gap))
         slot = gap.index(i)
