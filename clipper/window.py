@@ -109,3 +109,15 @@ def build_windows(transcript: dict, energy: list[float], duration: float,
             break
         cursor = nxt
     return windows
+
+
+def write_windows(run) -> list[dict]:
+    """Build windows from the run's transcript and energy, and write windows.json.
+
+    The one code path for this stage; the CLI and the web runner both call it.
+    """
+    source = run.read_json("source.json")
+    windows = build_windows(run.read_json("transcript.json"), source["energy"],
+                            duration=source["duration"])
+    run.write_json("windows.json", {"windows": windows})
+    return windows

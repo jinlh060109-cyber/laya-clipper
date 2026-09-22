@@ -17,7 +17,7 @@ from clipper.render import run_render
 from clipper.run import MissingArtifact, Run
 from clipper.stages.score import run_score
 from clipper.transcribe import transcribe
-from clipper.window import build_windows
+from clipper.window import write_windows
 
 RUNS_DIR = Path("runs")
 
@@ -81,14 +81,6 @@ def _ingest_and_transcribe(video: Path, name: str | None, model: str,
     return run
 
 
-def _window(run: Run) -> list[dict]:
-    source = run.read_json("source.json")
-    windows = build_windows(run.read_json("transcript.json"),
-                            source["energy"], duration=source["duration"])
-    run.write_json("windows.json", {"windows": windows})
-    return windows
-
-
 def _report_score(result: dict) -> None:
     print(f"{result['candidates']} candidates, {result['uncertain']} uncertain, "
           f"{result['failed']} failed windows (scored on {result['device']})")
@@ -121,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "window":
             run = Run.open(Path(args.run))
-            print(f"{len(_window(run))} windows")
+            print(f"{len(write_windows(run))} windows")
 
         elif args.command == "score":
             run = Run.open(Path(args.run))
@@ -150,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             video = Path(args.video)
             run = _ingest_and_transcribe(video, args.run, args.model)
             if not run.exists("windows.json"):
-                _window(run)
+                write_windows(run)
             _report_score(run_score(run, args.profile, device=args.device))
             print(f"Artifacts in {run.root}.")
             print("Next: ask Claude to run the plan stage "
