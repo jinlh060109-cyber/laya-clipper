@@ -30,3 +30,13 @@ def test_write_is_atomic_leaving_no_partial_file(tmp_path, monkeypatch):
 def test_clips_dir_is_created_on_demand(tmp_path):
     run = Run.create(tmp_path, "ep47")
     assert run.clips_dir().is_dir()
+
+def test_open_returns_run_rooted_at_existing_directory(tmp_path):
+    created = Run.create(tmp_path, "ep47")
+    run = Run.open(created.root)
+    assert run.root == created.root
+
+def test_open_raises_actionable_error_when_run_missing(tmp_path):
+    with pytest.raises(MissingArtifact) as err:
+        Run.open(tmp_path / "nonexistent")
+    assert "clipper ingest" in str(err.value)

@@ -32,7 +32,9 @@ class Run:
     @classmethod
     def open(cls, path: Path) -> "Run":
         if not path.is_dir():
-            raise MissingArtifact(f"No run directory at {path}")
+            raise MissingArtifact(
+                f"No run directory at {path}. Run `clipper ingest <video>` first to create one."
+            )
         return cls(path)
 
     def path(self, name: str) -> Path:
