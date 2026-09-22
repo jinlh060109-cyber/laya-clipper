@@ -59,6 +59,18 @@ def test_score_criteria_must_be_a_list_and_choice_a_mapping():
     assert isinstance(p.questions["hook_type"]["criteria"], dict)
 
 
+def test_noul_with_unquoted_boolean_keys_is_rejected(tmp_path, monkeypatch):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(
+        "name: bad\nquestions:\n  q:\n    type: noul\n    instructions: hi\n"
+        "    criteria:\n      true: yes\n      false: no\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("clipper.profiles.loader.PROFILE_DIR", tmp_path)
+    with pytest.raises(ProfileError, match="parse as booleans"):
+        load_profile("bad")
+
+
 def test_all_five_profiles_are_available_and_load():
     names = available_profiles()
     assert set(names) >= {"core", "podcast", "talking_head", "lecture", "stream"}
@@ -69,6 +81,29 @@ def test_all_five_profiles_are_available_and_load():
 def test_unknown_profile_names_what_exists():
     with pytest.raises(ProfileError, match="podcast"):
         load_profile("nope")
+
+
+def test_noul_criteria_keys_are_the_strings_true_and_false():
+    """Unquoted `true:`/`false:` in YAML parse as Python booleans, not strings.
+
+    laya.common.render_options looks up crit.get("true")/crit.get("false") with
+    string keys, so boolean keys miss silently and Laya falls back to generic
+    text -- the hand-written criteria never reach the model. This must hold for
+    every noul question in every profile.
+    """
+    for name in available_profiles():
+        profile = load_profile(name)
+        for qid, q in profile.questions.items():
+            if q["type"] != "noul":
+                continue
+            keys = set(q["criteria"].keys())
+            assert keys == {"true", "false"}, (
+                f"{name}/{qid}: criteria keys are {keys!r}, expected string "
+                f"keys {{'true', 'false'}} (unquoted YAML true:/false: parse as booleans)"
+            )
+            assert all(isinstance(k, str) for k in keys), (
+                f"{name}/{qid}: criteria keys must be strings, got {[type(k) for k in keys]}"
+            )
 
 
 @pytest.mark.model
@@ -97,14 +132,31 @@ def test_every_question_fits_layas_question_head():
                 crit = {c: None for c in crit}
             internal = {"t": q["type"], "ins": q["instructions"], "crit": crit}
             seq, markers = build_sequence(tok, state, internal, 512, 192)
-            expected = len(render_options(internal))
+            options = render_options(internal)
+            expected = len(options)
             assert len(markers) == expected, (
                 f"{name}/{qid}: {expected - len(markers)} option(s) dropped; shorten the criteria"
             )
+            if q["type"] == "noul":
+                # A false assurance in the original guard: it only checked option
+                # count and token budget, and Laya's generic true/false fallback
+                # text is *shorter* than hand-written criteria -- so silently
+                # falling back to it made these assertions MORE likely to pass,
+                # not less. Assert the profile's own wording actually made it
+                # into what Laya renders, not a fallback substituted because the
+                # criteria keys weren't the strings "true"/"false".
+                rendered_text = " ".join(str(o) for o in options)
+                for value in crit.values():
+                    assert value in rendered_text, (
+                        f"{name}/{qid}: rendered options do not contain this profile's "
+                        f"own criteria text {value!r}; Laya likely substituted its "
+                        f"generic true/false fallback because the criteria keys were "
+                        f"not the strings \"true\"/\"false\"."
+                    )
             head = tok(f"{q['type']} question: {q['instructions']}",
                        add_special_tokens=False)["input_ids"]
             opt_ids = [[0] + tok(" " + o, add_special_tokens=False)["input_ids"][:48]
-                       for o in render_options(internal)]
+                       for o in options]
             budget = 192 - sum(len(o) for o in opt_ids)
             assert len(head) <= max(8, budget), (
                 f"{name}/{qid}: instructions truncated by {len(head) - max(8, budget)} tokens"

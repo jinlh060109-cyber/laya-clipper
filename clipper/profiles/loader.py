@@ -83,6 +83,14 @@ def _validate(name: str, data: dict) -> None:
             raise ProfileError(f"Profile {name!r} question {qid!r} needs at least 2 score levels.")
         if qtype == "choice" and not isinstance(crit, dict):
             raise ProfileError(f"Profile {name!r} question {qid!r} is a choice; criteria must be a mapping.")
+        if qtype == "noul":
+            if not isinstance(crit, dict) or set(crit.keys()) != {"true", "false"}:
+                raise ProfileError(
+                    f"Profile {name!r} question {qid!r} is a noul; criteria must be a mapping "
+                    f"with exactly the string keys \"true\" and \"false\", got {crit!r}. "
+                    f"Unquoted YAML `true:`/`false:` parse as booleans, not strings — quote "
+                    f'them as "true": and "false": in the YAML.'
+                )
 
     for block in ("weights", "penalties", "gates"):
         for key in (data.get(block) or {}):

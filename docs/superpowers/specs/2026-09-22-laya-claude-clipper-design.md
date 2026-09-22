@@ -273,7 +273,8 @@ questions:
   open_loop:
     type: noul           # -> Laya "noul",   boolean with true/false criteria
     instructions: ...
-    criteria: { true: "...", false: "..." }
+    criteria: { "true": "...", "false": "..." }  # keys must be quoted strings,
+                                                  # not YAML booleans
 ```
 
 `type` / `instructions` / `criteria` are exactly the keys Laya's agent consumes.

@@ -5,14 +5,14 @@ questions:
     type: noul
     instructions: The speaker states a bold opinion they expect some viewers to reject.
     criteria:
-      true: "A clear, contestable claim is made."
-      false: "Uncontroversial or purely descriptive."
+      "true": "A clear, contestable claim is made."
+      "false": "Uncontroversial or purely descriptive."
   direct_address:
     type: noul
     instructions: The speaker addresses the viewer directly rather than a third party.
     criteria:
-      true: "Speaks to 'you' as the audience."
-      false: "Talks about a subject without addressing anyone."
+      "true": "Speaks to 'you' as the audience."
+      "false": "Talks about a subject without addressing anyone."
 weights:
   hot_take: 0.07
   direct_address: 0.04

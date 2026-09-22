@@ -36,56 +36,56 @@ questions:
     type: noul
     instructions: The opening raises a question the viewer needs resolved.
     criteria:
-      true: "A curiosity gap is opened and not immediately closed."
-      false: "Everything is stated flatly with nothing left pending."
+      "true": "A curiosity gap is opened and not immediately closed."
+      "false": "Everything is stated flatly with nothing left pending."
   self_contained:
     type: noul
     instructions: This segment is understandable to someone who has heard nothing before it.
     criteria:
-      true: "A new listener follows it completely."
-      false: "A new listener would be lost or confused."
+      "true": "A new listener follows it completely."
+      "false": "A new listener would be lost or confused."
   needs_context:
     type: noul
     instructions: >
       The segment refers to something discussed earlier that is not present in
       the segment itself.
     criteria:
-      true: "Contains unexplained references such as 'that thing we mentioned'."
-      false: "Every reference is explained inside the segment."
+      "true": "Contains unexplained references such as 'that thing we mentioned'."
+      "false": "Every reference is explained inside the segment."
   ends_cleanly:
     type: noul
     instructions: The thought reaches a natural conclusion before the segment ends.
     criteria:
-      true: "The point lands and completes."
-      false: "It cuts off mid-thought or trails away."
+      "true": "The point lands and completes."
+      "false": "It cuts off mid-thought or trails away."
   payoff:
     type: noul
     instructions: The segment delivers on what its opening implies.
     criteria:
-      true: "The promise made at the start is met by the end."
-      false: "It sets something up and never resolves it."
+      "true": "The promise made at the start is met by the end."
+      "false": "It sets something up and never resolves it."
   poster_line:
     type: noul
     instructions: >
       The segment contains at least one sentence you could put on a poster:
       quotable, self-standing, and memorable on its own.
     criteria:
-      true: "There is a line worth quoting verbatim."
-      false: "Nothing here would survive being pulled out of context."
+      "true": "There is a line worth quoting verbatim."
+      "false": "Nothing here would survive being pulled out of context."
   concrete_specifics:
     type: noul
     instructions: The segment contains a specific number, name, date, or worked example.
     criteria:
-      true: "Contains concrete specifics rather than generalities."
-      false: "Entirely abstract or generic."
+      "true": "Contains concrete specifics rather than generalities."
+      "false": "Entirely abstract or generic."
   audible_reaction:
     type: noul
     instructions: >
       Someone in the recording reacts: laughter, an interjection, a sharp
       agreement or disagreement, an audible pause of surprise.
     criteria:
-      true: "A visible human reaction occurs in the transcript."
-      false: "Even, uninterrupted delivery."
+      "true": "A visible human reaction occurs in the transcript."
+      "false": "Even, uninterrupted delivery."
   emotional_intensity:
     type: score
     instructions: The emotional charge of the segment, whatever its direction.
@@ -113,16 +113,16 @@ questions:
       The first sentence is setup, backstory, throat-clearing, or a greeting
       rather than the point itself.
     criteria:
-      true: "Begins with a wind-up such as 'so, um, basically' or a long preamble."
-      false: "Begins directly on substance."
+      "true": "Begins with a wind-up such as 'so, um, basically' or a long preamble."
+      "false": "Begins directly on substance."
   buried_lede:
     type: noul
     instructions: >
       The most interesting moment arrives well after the segment starts, so the
       opening should be trimmed later.
     criteria:
-      true: "The best line is in the second half."
-      false: "The best material is at or near the start."
+      "true": "The best line is in the second half."
+      "false": "The best material is at or near the start."
 weights:
   clipworthy: 0.45
   hook_strength: 0.30
