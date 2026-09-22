@@ -6,12 +6,15 @@ from clipper.profiles.loader import load_profile
 
 
 @pytest.fixture(autouse=True)
-def every_device_available(monkeypatch):
+def every_device_available(request, monkeypatch):
     """Device resolution is device.py's concern; here it must not depend on the host.
 
     Without this, requesting "xpu" resolves to CPU on any machine whose torch
     build lacks XPU, and the loader never sees the device the test asked for.
+    Model-marked tests are exempt: they must resolve against the real hardware.
     """
+    if request.node.get_closest_marker("model"):
+        return
     monkeypatch.setattr("clipper.device.default_probes",
                         lambda: {"cuda": lambda: True, "xpu": lambda: True,
                                  "mps": lambda: True})
@@ -137,6 +140,7 @@ def test_real_agent_loads_and_scores_one_window():
 
     profile = load_profile("core")
     agent, meta = load_agent("en", profile)
+    assert meta["device"] == meta["device_requested"], "Laya silently fell back"
     assert meta["checkpoint"] == "root"
     assert meta["revision"] != "unknown"
 
