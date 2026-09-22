@@ -3,19 +3,18 @@ name = "clipper"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "typesafe-sdk",
+    "laya",
     "whisperx",
     "pyyaml",
     "httpx",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest"]
 
 [project.scripts]
 clipper = "clipper.cli:main"
 
 [tool.pytest.ini_options]
-markers = ["live: hits a real API; deselected by default"]
-addopts = "-m 'not live'"
-asyncio_mode = "auto"
+markers = ["model: loads the real Laya checkpoint; deselected by default"]
+addopts = "-m 'not model'"

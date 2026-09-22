@@ -1,0 +1,35 @@
+name: lecture
+extends: core
+questions:
+  complete_explanation:
+    type: noul
+    instructions: The segment explains its concept from start to finish without leaving a gap.
+    criteria:
+      true: "A viewer could act on this without the rest of the lecture."
+      false: "The explanation depends on material outside the segment."
+  one_concept:
+    type: noul
+    instructions: The segment carries exactly one idea rather than several partial ones.
+    criteria:
+      true: "A single concept, fully carried."
+      false: "Two or more ideas, none finished."
+  actionable:
+    type: noul
+    instructions: The segment gives something the viewer can do, not only something to know.
+    criteria:
+      true: "Contains a method, step, or applicable rule."
+      false: "Purely conceptual."
+  requires_visual:
+    type: noul
+    instructions: >
+      Understanding this segment requires seeing slides, diagrams, or written
+      material that a clip would not carry.
+    criteria:
+      true: "Refers to something on screen that must be seen."
+      false: "Fully carried by the audio."
+weights:
+  complete_explanation: 0.07
+  one_concept: 0.06
+  actionable: 0.04
+penalties:
+  requires_visual: 0.25

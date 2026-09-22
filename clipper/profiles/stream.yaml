@@ -1,0 +1,29 @@
+name: stream
+extends: core
+questions:
+  reaction_spike:
+    type: noul
+    instructions: The streamer reacts sharply — surprise, outrage, delight, or disbelief.
+    criteria:
+      true: "A strong, sudden reaction occurs."
+      false: "Even delivery throughout."
+  narratable:
+    type: noul
+    instructions: >
+      What happens is followable from speech alone, without watching the
+      gameplay.
+    criteria:
+      true: "The words carry the event."
+      false: "Only makes sense if you can see the screen."
+  needs_gameplay_context:
+    type: noul
+    instructions: >
+      The moment is incomprehensible without knowing the prior game state.
+    criteria:
+      true: "Depends on setup the viewer has not seen."
+      false: "Self-explanatory."
+weights:
+  reaction_spike: 0.08
+  narratable: 0.05
+penalties:
+  needs_gameplay_context: 0.20
