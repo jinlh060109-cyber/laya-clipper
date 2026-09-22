@@ -20,6 +20,21 @@ def _rotation(stream: dict) -> int:
     for side in stream.get("side_data_list", []):
         if "rotation" in side:
             return int(side["rotation"])
+    # Fallback for phone-shot files that carry no display matrix, only a
+    # `tags.rotate` string (e.g. many MP4/MOV files from mobile cameras).
+    #
+    # Sign convention: ffmpeg's display-matrix `rotation` (the side-data
+    # convention above, and the convention source.json stores) is the
+    # NEGATION of `tags.rotate`. Portrait footage needing 90 degrees
+    # clockwise for display reports side_data rotation: -90 alongside
+    # tags: {"rotate": "90"}. Negate here so the fallback matches the
+    # side-data convention - do not "fix" this back to +raw.
+    raw = stream.get("tags", {}).get("rotate")
+    if raw is not None:
+        try:
+            return -int(raw)
+        except (TypeError, ValueError):
+            return 0
     return 0
 
 
@@ -92,15 +107,22 @@ def per_second_rms(ffmpeg: Path, wav: Path, duration: float) -> list[float]:
          "-f", "null", "-"],
         capture_output=True, text=True, check=False,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"RMS extraction failed on {wav}:\n{result.stderr}")
     levels: list[float] = []
     for line in (result.stderr + result.stdout).splitlines():
         if "RMS_level=" in line:
             raw = line.rsplit("=", 1)[1].strip()
             db = -90.0 if raw in {"-inf", "-nan", "nan"} else float(raw)
             levels.append(10 ** (max(db, -90.0) / 20.0))
+    if not levels:
+        raise RuntimeError(
+            f"No RMS levels parsed from ffmpeg astats output for {wav}; "
+            f"the astats filter may not have run."
+        )
     expected = max(1, int(duration))
     if len(levels) < expected:
-        levels.extend([levels[-1] if levels else 0.0] * (expected - len(levels)))
+        levels.extend([levels[-1]] * (expected - len(levels)))
     return levels[:expected]
 
 
