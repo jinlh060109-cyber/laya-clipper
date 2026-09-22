@@ -96,6 +96,11 @@ class JobRunner:
     def __init__(self, stages: Stages | None = None) -> None:
         self._stages = stages
         self._lock = threading.Lock()
+        # A separate lock for the job.json write itself: `status()`/`busy()`
+        # only ever need `_lock` briefly, but two threads persisting the same
+        # run's job.json (a job finishing while the next one's `start()` does
+        # its initial write) must not race through the same `.tmp` file.
+        self._write_lock = threading.Lock()
         self._job: Job | None = None
         self._thread: threading.Thread | None = None
 
@@ -121,19 +126,35 @@ class JobRunner:
         with self._lock:
             if self._job is not None and self._job.state == "running":
                 raise JobBusy("A job is already running. Wait for it to finish.")
+            previous = self._job
             job = Job(run=run, video=video, settings=dict(settings))
             self._job = job
-        run.write_json("settings.json", job.settings)
-        self._persist(job)
+        try:
+            run.write_json("settings.json", job.settings)
+            self._persist(job)
+        except Exception:
+            # The job never actually started: don't leave a phantom "running"
+            # job behind (every later start()/upload would then raise
+            # JobBusy forever). Restore whatever was there before and let the
+            # caller see the error.
+            with self._lock:
+                if self._job is job:
+                    self._job = previous
+            raise
         self._thread = threading.Thread(target=self._execute, args=(job,), daemon=True)
         self._thread.start()
 
     # -- internals ---------------------------------------------------------
 
     def _persist(self, job: Job) -> None:
-        with self._lock:
-            snapshot = job.snapshot()
-        job.run.write_json("job.json", snapshot)
+        # Hold the write lock across the snapshot *and* the write so two
+        # concurrent persists (e.g. a job finishing while the next start()
+        # writes its own initial job.json) can't interleave through the same
+        # job.json.tmp file.
+        with self._write_lock:
+            with self._lock:
+                snapshot = job.snapshot()
+            job.run.write_json("job.json", snapshot)
 
     def _update(self, job: Job, **changes) -> None:
         with self._lock:
@@ -142,7 +163,27 @@ class JobRunner:
                 job.stages[stage_changes[0]] = stage_changes[1]
             for key, value in changes.items():
                 setattr(job, key, value)
+        # The in-memory job (read by status()/busy()) is the source of
+        # truth and has already been updated above; persisting it to disk
+        # is best-effort and must not crash the worker thread. A raised
+        # persist failure here still propagates to the caller (_step, or
+        # _execute's final "done" update), which is caught by _execute's
+        # catch-all and turned into a proper "failed" job via _fail.
         self._persist(job)
+
+    def _fail(self, job: Job, exc: Exception) -> None:
+        """Best-effort terminal failure marker: this must never itself raise."""
+        with self._lock:
+            running = next((s for s, state in job.stages.items() if state == "running"), None)
+            job.state = "failed"
+            job.error = str(exc) or type(exc).__name__
+            if job.failed_stage is None:
+                job.failed_stage = running
+            job.finished = time.time()
+        try:
+            self._persist(job)
+        except Exception:
+            pass
 
     def _step(self, job: Job, name: str, fn: Callable[[], Any]) -> Any:
         self._update(job, stage=(name, "running"))
@@ -157,9 +198,13 @@ class JobRunner:
         return value
 
     def _execute(self, job: Job) -> None:
-        stages, run, settings = self.stages, job.run, job.settings
+        run, settings = job.run, job.settings
         agent = None
         try:
+            # Building the real stages (importing torch etc.) can itself
+            # fail, so it must be inside this try -- see the catch-all below.
+            stages = self.stages
+
             self._step(job, "ingest", lambda: stages.ingest(run, job.video))
             self._step(job, "transcribe", lambda: stages.transcribe(run, settings))
             self._step(job, "windows", lambda: stages.windows(run))
@@ -183,6 +228,11 @@ class JobRunner:
 
             result = self._step(job, "score",
                                 lambda: stages.score(run, picked["profile"], settings, agent))
+            # Marking "done" is part of the same protected body: if this
+            # persist fails too, the catch-all below still ends the job
+            # rather than leaving it stuck "running".
+            self._update(job, state="done", result=result, finished=time.time())
         except _Stopped:
             return
-        self._update(job, state="done", result=result, finished=time.time())
+        except Exception as exc:  # noqa: BLE001 - any escape ends the job, never leaves it "running"
+            self._fail(job, exc)

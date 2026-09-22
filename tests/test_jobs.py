@@ -132,3 +132,65 @@ def test_a_new_job_may_start_after_the_last_one_finished(run):
     runner = JobRunner(recorder_stages([]))
     _go(runner, run)
     assert _go(runner, run)["state"] == "done"
+
+
+def test_a_persist_failure_while_finishing_does_not_leave_the_runner_stuck(run, monkeypatch):
+    """A write_json failure on the very last "done" persist must still end
+    the job (as failed, since it couldn't be durably recorded as done)
+    rather than leaving it "running" forever."""
+    real_write_json = run.write_json
+
+    def flaky_write_json(name, data):
+        if name == "job.json" and data.get("state") == "done":
+            raise OSError("disk full")
+        real_write_json(name, data)
+
+    monkeypatch.setattr(run, "write_json", flaky_write_json)
+    runner = JobRunner(recorder_stages([]))
+    status = _go(runner, run)
+
+    assert status["state"] == "failed"
+    assert "disk full" in status["error"]
+    assert runner.busy() is False
+
+    # The runner is not wedged: a later job on the same runner still works.
+    monkeypatch.setattr(run, "write_json", real_write_json)
+    assert _go(runner, run)["state"] == "done"
+
+
+def test_a_failure_building_the_real_stages_ends_the_job_failed(run, monkeypatch):
+    import clipper.web.jobs as jobs_module
+
+    def boom():
+        raise ImportError("torch missing")
+
+    monkeypatch.setattr(jobs_module, "default_stages", boom)
+    runner = JobRunner()  # stages=None -> built lazily from the real pipeline
+    status = _go(runner, run)
+
+    assert status["state"] == "failed"
+    assert "torch missing" in status["error"]
+    assert status["failed_stage"] is None
+    assert runner.busy() is False
+
+
+def test_a_start_time_write_failure_reraises_and_leaves_the_runner_idle(run, monkeypatch):
+    def boom(name, data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(run, "write_json", boom)
+    runner = JobRunner(recorder_stages([]))
+
+    with pytest.raises(OSError):
+        runner.start(run, run.path("video.mp4"), SETTINGS)
+
+    assert runner.busy() is False
+    assert runner.status() == {"state": "idle"}
+
+
+def test_a_normal_stage_failure_is_persisted_to_job_json(run):
+    _go(JobRunner(recorder_stages([], fail_at="transcribe")), run)
+    job_json = run.read_json("job.json")
+    assert job_json["state"] == "failed"
+    assert job_json["failed_stage"] == "transcribe"
+    assert "transcribe exploded" in job_json["error"]
