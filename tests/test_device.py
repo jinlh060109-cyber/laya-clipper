@@ -57,5 +57,15 @@ def test_case_and_whitespace_are_tolerated():
     assert resolve_device("  XPU ", probes(xpu=True)) == "xpu"
 
 
+def test_auto_prefers_xpu_over_mps_when_both_are_available():
+    """The ordering the suite must be able to detect: an Arc GPU must not
+    lose to mps. Without both flags set, a swapped PROBE_ORDER passes."""
+    assert resolve_device("auto", probes(xpu=True, mps=True)) == "xpu"
+
+
+def test_auto_follows_the_documented_priority_when_everything_is_available():
+    assert resolve_device("auto", probes(cuda=True, xpu=True, mps=True)) == "cuda"
+
+
 def test_probe_order_puts_xpu_ahead_of_cpu():
     assert PROBE_ORDER.index("xpu") < PROBE_ORDER.index("cpu")

@@ -77,7 +77,8 @@ def resolve_device(requested: str | None = None,
     warnings.warn(
         f"Device {requested!r} was requested but is not available; falling back to CPU. "
         f"Scoring on CPU measured ~5.9x slower (about 78 minutes for a 90-minute "
-        f"source, against 13 on an Intel Arc GPU).",
+        f"source, against 13 on an Intel Arc GPU). "
+        f"Check that your torch build includes support for {requested!r} (e.g. a '+{requested}' build).",
         RuntimeWarning,
         stacklevel=2,
     )
