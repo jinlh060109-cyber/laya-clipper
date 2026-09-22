@@ -20,7 +20,7 @@ def test_find_binary_raises_actionable_error(monkeypatch):
 def test_has_subtitles_filter_detects_presence(monkeypatch):
     monkeypatch.setattr(
         "clipper.preflight._run_filters",
-        lambda _: "... T.. subtitles         V->V       Render text subtitles ...",
+        lambda _: " T.. subtitles         V->V       Render text subtitles onto input video using the libass library.",
     )
     assert has_subtitles_filter(Path("ffmpeg")) is True
 
