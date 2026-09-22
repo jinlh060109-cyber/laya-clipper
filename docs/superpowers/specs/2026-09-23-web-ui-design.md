@@ -67,7 +67,10 @@ Upload uses a raw `PUT` body rather than multipart so the server needs no form
 parser and never holds the file in memory. The filename is taken from the query
 string, reduced to its basename, and slugified for the run name with
 `default_run_name`. The file keeps its original extension inside the run
-directory as `source<ext>`.
+directory as `video<ext>` (not `source<ext>`, which would collide with the
+`source.json` artifact ingest writes). Accepted extensions: `.mp4`, `.mov`,
+`.mkv`, `.webm`, `.avi`, `.m4v`; anything else is `400`. An upload while a job
+is running is `409`, so it cannot overwrite a video mid-ingest.
 
 ### 3.2 Jobs
 
