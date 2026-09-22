@@ -5,6 +5,18 @@ from clipper.agent import (AgentError, checkpoint_for_language, load_agent,
 from clipper.profiles.loader import load_profile
 
 
+@pytest.fixture(autouse=True)
+def every_device_available(monkeypatch):
+    """Device resolution is device.py's concern; here it must not depend on the host.
+
+    Without this, requesting "xpu" resolves to CPU on any machine whose torch
+    build lacks XPU, and the loader never sees the device the test asked for.
+    """
+    monkeypatch.setattr("clipper.device.default_probes",
+                        lambda: {"cuda": lambda: True, "xpu": lambda: True,
+                                 "mps": lambda: True})
+
+
 class FakeLoaded:
     """Stands in for a loaded laya.Agent."""
 
