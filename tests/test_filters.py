@@ -2,6 +2,8 @@ from pathlib import Path
 import pytest
 from clipper.filters import build_filter_chain, crop_expression, subtitles_expression
 
+STAGED = Path("C:/tmp/clipper_x/c.ass")
+
 def test_crop_expression_is_nine_by_sixteen_of_the_height():
     assert crop_expression(1920, 1080, "center") == "crop=607:1080:656:0"
 
@@ -22,8 +24,7 @@ def test_source_narrower_than_nine_by_sixteen_is_not_cropped():
     assert crop_expression(1080, 1920, "center") == ""
 
 def test_filter_order_is_crop_then_scale_then_subtitles(tmp_path):
-    sub = tmp_path / "c.ass"
-    sub.write_text("")
+    sub = STAGED  # never read; tmp_path may contain a space (e.g. a Windows username)
     chain = build_filter_chain(1920, 1080, vertical=True, subtitle_path=sub)
     assert chain.index("crop=") < chain.index("scale=") < chain.index("subtitles=")
 
@@ -32,8 +33,7 @@ def test_vertical_scales_to_1080x1920(tmp_path):
     assert "scale=1080:1920" in chain
 
 def test_horizontal_has_no_crop_or_scale(tmp_path):
-    sub = tmp_path / "c.ass"
-    sub.write_text("")
+    sub = STAGED  # never read; tmp_path may contain a space (e.g. a Windows username)
     chain = build_filter_chain(1920, 1080, vertical=False, subtitle_path=sub)
     assert "crop=" not in chain
     assert "scale=" not in chain
