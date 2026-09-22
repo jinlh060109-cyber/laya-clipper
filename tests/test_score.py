@@ -1,5 +1,3 @@
-import pytest
-
 from clipper.profiles.loader import load_profile
 from clipper.score import (answers_to_dict, build_questions, normalize_answer,
                            score_windows, window_state)
@@ -134,3 +132,44 @@ def test_a_failing_window_is_marked_and_the_run_continues():
     assert [r["failed"] for r in records] == [False, True, False]
     assert records[1]["answers"] == {}
     assert "simulated inference failure" in records[1]["error"]
+
+
+def test_build_questions_deep_copies_nested_structures():
+    """Mutating the returned dict must not affect the original Profile."""
+    p = load_profile("core")
+    original_criteria = p.questions["clipworthy"]["criteria"]
+    original_length = len(original_criteria)
+    qs = build_questions(p)
+    # Mutate the returned criteria list
+    qs["clipworthy"]["criteria"].append("mutated")
+    # Original Profile must be unchanged
+    assert len(p.questions["clipworthy"]["criteria"]) == original_length
+    assert p.questions["clipworthy"]["criteria"] is original_criteria
+
+
+class MalformedAgent:
+    """Returns structurally incorrect responses without raising."""
+
+    def __init__(self, response):
+        self.response = response
+
+    def system_one(self, state, questions):
+        return self.response
+
+
+def test_malformed_response_from_agent_is_caught_and_window_marked_failed():
+    """A response that is malformed but doesn't raise should mark the window failed."""
+    p = load_profile("core")
+    # Agent returns answers as a string instead of a dict
+    malformed_agent = MalformedAgent({"answers": "not-a-mapping"})
+    records = score_windows([win(0), win(1), win(2)], p, malformed_agent)
+    # All windows should have records
+    assert len(records) == 3
+    assert [r["id"] for r in records] == [0, 1, 2]
+    # First window should be marked failed
+    assert records[0]["failed"] is True
+    assert "error" in records[0]
+    assert records[0]["answers"] == {}
+    # Remaining windows should also be attempted (agent called 3 times)
+    assert records[1]["failed"] is True
+    assert records[2]["failed"] is True

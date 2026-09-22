@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 from clipper.profiles.loader import Profile
 
 
@@ -8,7 +10,7 @@ def build_questions(profile: Profile) -> dict[str, dict]:
 
     Kept as a named seam so a future profile feature has one place to land.
     """
-    return {qid: dict(q) for qid, q in profile.questions.items()}
+    return {qid: copy.deepcopy(q) for qid, q in profile.questions.items()}
 
 
 def window_state(window: dict, profile_name: str) -> dict:
@@ -89,11 +91,10 @@ def score_windows(windows: list[dict], profile: Profile, agent) -> list[dict]:
         state = window_state(window, profile.name)
         try:
             response = agent.system_one(state, questions)
+            answers = answers_to_dict(response, profile)
         except Exception as exc:  # noqa: BLE001 - any inference failure is per-window
             records.append({"id": window["id"], "answers": {}, "failed": True,
                             "error": f"{type(exc).__name__}: {exc}"})
             continue
-        records.append({"id": window["id"],
-                        "answers": answers_to_dict(response, profile),
-                        "failed": False})
+        records.append({"id": window["id"], "answers": answers, "failed": False})
     return records
