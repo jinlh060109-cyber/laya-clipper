@@ -1,0 +1,13 @@
+{
+  "segments": [
+    { "start": 872.41, "end": 878.90, "text": " So the thing nobody says",
+      "speaker": "SPEAKER_01",
+      "words": [
+        { "word": "So", "start": 872.41, "end": 872.58, "score": 0.91, "speaker": "SPEAKER_01" },
+        { "word": "the", "start": 872.60, "end": 872.72, "score": 0.88, "speaker": "SPEAKER_01" },
+        { "word": "thing" },
+        { "word": "nobody", "start": 873.10, "end": 873.55, "score": 0.93, "speaker": "SPEAKER_01" },
+        { "word": "says", "start": 873.58, "end": 873.99, "score": 0.90, "speaker": "SPEAKER_01" }
+      ] }
+  ]
+}
