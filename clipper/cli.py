@@ -141,12 +141,15 @@ def main(argv: list[str] | None = None) -> int:
                 print("The plan stage is performed by Claude. "
                       "See .claude/skills/clipper/SKILL.md, then re-run with --check.")
                 return 0
-            warnings = check_plan(run)
+            errors, warnings = check_plan(run)
+            for error in errors:
+                print(f"error: {error}")
             for warning in warnings:
-                print(warning)
-            if warnings:
+                print(f"warning: {warning}")
+            if errors:
                 return 1
-            print("plan.json looks good.")
+            print("plan.json looks good." if not warnings
+                  else "plan.json will render; review the warnings above.")
 
         elif args.command == "render":
             run = Run.open(Path(args.run))
@@ -165,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
                   "(.claude/skills/clipper/SKILL.md), then `clipper render`.")
 
     except (ProfileError, MissingArtifact, PreflightError, AgentError,
-            ValueError) as error:
+            ValueError, RuntimeError) as error:
         print(str(error), file=sys.stderr)
         return 1
     return 0

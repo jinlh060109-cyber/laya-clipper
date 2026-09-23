@@ -136,3 +136,42 @@ def test_burned_subtitles_survive_a_temp_dir_with_spaces(tmp_path, monkeypatch):
         out = render_clip(Path(shutil.which("ffmpeg")), source, {"in": 0.0, "out": 11.0},
                           tmp_path / "clip.mp4", chain, cwd=staged.parent)
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_render_refuses_a_malformed_plan_before_touching_ffmpeg(tmp_path, monkeypatch):
+    from clipper import render
+    from clipper.run import Run
+
+    run = Run.create(tmp_path, "ep")
+    run.write_json("source.json", {"path": "C:/src.mp4", "duration": 100.0,
+                                   "video": {"width": 1920, "height": 1080, "rotation": 0}})
+    run.write_json("transcript.json", {"language": "en", "segments": []})
+    run.write_json("plan.json", {"clips": [{"in": 10.0, "out": 40.0, "crop_x": "left"}]})
+    monkeypatch.setattr(render, "preflight",
+                        lambda **k: type("T", (), {"ffmpeg": Path("ffmpeg")})())
+    called = []
+    monkeypatch.setattr(render, "render_clip", lambda *a, **k: called.append(a))
+    with pytest.raises(ValueError, match="crop_x"):
+        render.run_render(run, captions="none")
+    assert called == []
+
+
+def test_a_failed_render_leaves_no_partial_file_and_quotes_ffmpeg_briefly(tmp_path, monkeypatch):
+    import subprocess
+
+    from clipper import render
+
+    target = tmp_path / "01.mp4"
+
+    def fake_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"partial")
+        banner = "ffmpeg version 9 Copyright\n" + "  --enable-x\n" * 300
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=banner + "Invalid argument\n")
+
+    monkeypatch.setattr(render.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as info:
+        render.render_clip(Path("ffmpeg"), Path("src.mp4"), {"in": 0.0, "out": 12.0},
+                           target, None)
+    assert not target.exists()
+    assert "Invalid argument" in str(info.value)
+    assert "Copyright" not in str(info.value)

@@ -16,7 +16,60 @@ HARD_MIN = 10.0
 SOFT_MAX = 60.0
 
 
+CAPTION_MODES = ("burn", "sidecar", "none")
+
+
+def _number(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _clip_errors(clip, label: str, duration: float) -> list[str]:
+    if not isinstance(clip, dict):
+        return [f"{label}: is not an object."]
+    errors: list[str] = []
+    start, end = _number(clip.get("in")), _number(clip.get("out"))
+    if start is None:
+        errors.append(f"{label}: 'in' is missing or not a number.")
+    if end is None:
+        errors.append(f"{label}: 'out' is missing or not a number.")
+    if start is not None and end is not None:
+        if start < 0:
+            errors.append(f"{label}: in-point {start:.1f}s is negative.")
+        if start >= duration:
+            errors.append(f"{label}: in-point {start:.1f}s is beyond the source end ({duration:.1f}s).")
+        elif end <= start:
+            errors.append(f"{label}: out-point {end:.1f}s is not after its in-point {start:.1f}s.")
+        elif min(end, duration) - start < HARD_MIN:
+            errors.append(f"{label}: {min(end, duration) - start:.1f}s is under the "
+                          f"{HARD_MIN:.0f}s minimum and will be rejected.")
+    crop_x = clip.get("crop_x", "center")
+    if crop_x != "center" and (isinstance(crop_x, bool) or _number(crop_x) is None):
+        errors.append(f"{label}: crop_x must be \"center\" or a pixel offset, not {crop_x!r}.")
+    if clip.get("captions", "burn") not in CAPTION_MODES:
+        errors.append(f"{label}: captions must be one of {', '.join(CAPTION_MODES)}, "
+                      f"not {clip.get('captions')!r}.")
+    return errors
+
+
+def plan_errors(plan: dict, duration: float) -> list[str]:
+    """Problems that would make render fail or cut the wrong thing."""
+    clips = plan.get("clips") if isinstance(plan, dict) else None
+    if not isinstance(clips, list) or not clips:
+        return ["plan.json needs a non-empty \"clips\" list."]
+    errors: list[str] = []
+    for index, clip in enumerate(clips, start=1):
+        errors.extend(_clip_errors(clip, f"clip {index}", duration))
+    return errors
+
+
 def validate_plan(plan: dict, duration: float) -> list[str]:
+    """Every problem: the hard errors from `plan_errors`, then softer warnings."""
+    errors = plan_errors(plan, duration)
     warnings: list[str] = []
     if not plan.get("laya_model"):
         warnings.append(
@@ -29,17 +82,19 @@ def validate_plan(plan: dict, duration: float) -> list[str]:
             f"the uncertain bucket may be unreliable."
         )
 
+    clips = plan.get("clips") if isinstance(plan.get("clips"), list) else []
     spans: list[tuple[float, float, int]] = []
-    for index, clip in enumerate(plan.get("clips", []), start=1):
-        start, end = float(clip["in"]), float(clip["out"])
-        length = end - start
+    for index, clip in enumerate(clips, start=1):
         label = f"clip {index}"
+        if _clip_errors(clip, label, duration):
+            continue  # already reported as an error
+        start, end = float(clip["in"]), float(clip["out"])
+        length = min(end, duration) - start
 
         if end > duration:
-            warnings.append(f"{label}: out-point {end:.1f}s is past the source end ({duration:.1f}s).")
-        if length < HARD_MIN:
-            warnings.append(f"{label}: {length:.1f}s is under the {HARD_MIN:.0f}s minimum and will be rejected.")
-        elif length > SOFT_MAX:
+            warnings.append(f"{label}: out-point {end:.1f}s is past the source end "
+                            f"({duration:.1f}s); it will be cut there.")
+        if length > SOFT_MAX:
             warnings.append(f"{label}: {length:.1f}s exceeds {SOFT_MAX:.0f}s; worth a second look.")
         else:
             fmt = clip.get("clip_format")
@@ -59,8 +114,12 @@ def validate_plan(plan: dict, duration: float) -> list[str]:
         for b_start, b_end, b in sorted(spans):
             if a < b and a_start < b_end and b_start < a_end:
                 warnings.append(f"clips {a} and {b} overlap.")
-    return warnings
+    return errors + warnings
 
 
-def check_plan(run: Run) -> list[str]:
-    return validate_plan(run.read_json("plan.json"), run.read_json("source.json")["duration"])
+def check_plan(run: Run) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for the run's plan.json."""
+    plan = run.read_json("plan.json")
+    duration = run.read_json("source.json")["duration"]
+    errors = plan_errors(plan, duration)
+    return errors, [w for w in validate_plan(plan, duration) if w not in errors]

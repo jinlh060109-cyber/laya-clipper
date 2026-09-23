@@ -60,3 +60,41 @@ def test_uncalibrated_confidence_is_flagged_with_its_buckets():
                               uncalibrated_buckets=["score:5", "noul"])
     warnings = validate_plan(plan, 5400.0)
     assert any("uncalibrated" in w and "score:5, noul" in w for w in warnings)
+
+
+from clipper.plan import plan_errors  # noqa: E402
+
+
+@pytest.mark.parametrize("clip, needle", [
+    ({"in": None}, "in"),
+    ({"out": "soon"}, "out"),
+    ({"in": -3.0}, "negative"),
+    ({"out": 90.0}, "not after"),
+    ({"in": 6000.0, "out": 6030.0}, "beyond"),
+    ({"out": 105.0}, "10s"),
+    ({"crop_x": "left"}, "crop_x"),
+    ({"captions": "yes"}, "captions"),
+])
+def test_hard_problems_are_errors_not_crashes(clip, needle):
+    plan = _plan(**clip)
+    if clip.get("in", 0) is None:
+        del plan["clips"][0]["in"]
+    errors = plan_errors(plan, duration=5400.0)
+    assert any(needle in e for e in errors), errors
+    validate_plan(plan, duration=5400.0)  # must not raise either
+
+
+def test_a_plan_without_clips_is_an_error():
+    assert plan_errors({"laya_model": {}}, 5400.0)
+    assert plan_errors({"clips": "none"}, 5400.0)
+    assert plan_errors({"clips": ["x"]}, 5400.0)
+
+
+def test_numeric_crop_x_and_valid_captions_are_accepted():
+    assert plan_errors(_plan(crop_x=300, captions="sidecar"), 5400.0) == []
+
+
+def test_soft_warnings_are_not_errors():
+    plan = _plan(clip_format="hot_take", out=145.0)
+    assert plan_errors(plan, 5400.0) == []
+    assert validate_plan(plan, 5400.0)

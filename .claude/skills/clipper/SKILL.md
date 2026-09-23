@@ -87,7 +87,8 @@ Write `runs/<name>/plan.json`:
 }
 ```
 
-Carry `laya_model` across verbatim. Then run `clipper plan <run> --check` and fix
-what it reports before rendering.
+Carry `laya_model` across verbatim. Then run `clipper plan <run> --check`.
+Fix every `error:` line; render refuses the plan until they are gone. Read
+each `warning:` line and either fix it or keep the clip on purpose.
 
 If the user has their own editing skills loaded, theirs override these defaults.

@@ -12,6 +12,8 @@ from clipper.captions import (
     build_cues, rebase, render_ass, render_srt, words_in_range,
 )
 from clipper.filters import build_filter_chain
+from clipper.ingest import ffmpeg_tail
+from clipper.plan import plan_errors
 from clipper.preflight import preflight
 from clipper.run import Run
 
@@ -87,7 +89,8 @@ def render_clip(ffmpeg: Path, source: Path, clip: dict,
                             capture_output=True, text=True, encoding="utf-8",
                             errors="replace", check=False, cwd=cwd)
     if result.returncode != 0:
-        raise RuntimeError(f"Render failed for {output.name}:\n{result.stderr[-2000:]}")
+        output.unlink(missing_ok=True)  # never leave a half-written clip behind
+        raise RuntimeError(f"Render failed for {output.name}:\n{ffmpeg_tail(result.stderr)}")
     return output
 
 
@@ -95,6 +98,9 @@ def run_render(run: Run, vertical: bool = False, captions: str = "burn") -> list
     plan = run.read_json("plan.json")
     source_meta = run.read_json("source.json")
     transcript = run.read_json("transcript.json")
+    errors = plan_errors(plan, source_meta["duration"])
+    if errors:
+        raise ValueError("plan.json cannot be rendered:\n" + "\n".join(errors))
     tools = preflight(require_subtitles=captions == "burn")
 
     source = Path(source_meta["path"]).resolve()

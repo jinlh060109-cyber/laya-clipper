@@ -157,3 +157,35 @@ def test_all_refuses_to_reuse_a_run_that_holds_another_video(capsys, tmp_path, m
     run.write_json("transcript.json", {"language": "en", "segments": []})
     assert main(["all", str(new), "--profile", "podcast", "--run", "ep"]) == 1
     assert "--run" in capsys.readouterr().err
+
+
+def test_plan_check_passes_with_only_soft_warnings(capsys, tmp_path):
+    from clipper.run import Run
+    run = Run.create(tmp_path, "ep")
+    run.write_json("source.json", {"duration": 5400.0,
+                                   "video": {"width": 1920, "height": 1080}})
+    run.write_json("plan.json", {"laya_model": LAYA_MODEL, "clips": [
+        {"in": 100.0, "out": 145.0, "title": "T", "clip_format": "hot_take"}]})
+    assert main(["plan", str(run.root), "--check"]) == 0
+    assert "hot_take target" in capsys.readouterr().out
+
+
+def test_plan_check_reports_a_malformed_clip_instead_of_crashing(capsys, tmp_path):
+    from clipper.run import Run
+    run = Run.create(tmp_path, "ep")
+    run.write_json("source.json", {"duration": 5400.0,
+                                   "video": {"width": 1920, "height": 1080}})
+    run.write_json("plan.json", {"laya_model": LAYA_MODEL, "clips": [{"out": 20.0}]})
+    assert main(["plan", str(run.root), "--check"]) == 1
+    assert "in" in capsys.readouterr().out
+
+
+def test_render_failure_is_reported_not_raised(capsys, tmp_path, monkeypatch):
+    def boom(run, vertical=False, captions="burn"):
+        raise RuntimeError("Render failed for 01.mp4:\nInvalid argument")
+
+    from clipper.run import Run
+    run = Run.create(tmp_path, "ep")
+    monkeypatch.setattr("clipper.cli.run_render", boom)
+    assert main(["render", str(run.root)]) == 1
+    assert "Invalid argument" in capsys.readouterr().err
