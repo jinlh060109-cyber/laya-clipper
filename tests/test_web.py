@@ -157,3 +157,15 @@ def test_a_second_start_and_an_upload_while_running_are_refused(server):
 def test_unknown_routes_are_404(server):
     base, *_ = server
     assert call("GET", base + "/nope")[0] == 404
+
+
+def test_the_page_calls_every_api_route_and_names_every_stage(server):
+    """A cheap guard that the page and the API have not drifted apart."""
+    from clipper.web.jobs import STAGES
+    base, *_ = server
+    _, body = call("GET", base + "/")
+    page = body.decode("utf-8")
+    for route in ("/api/config", "/api/upload", "/api/start", "/api/status"):
+        assert route in page
+    for stage in STAGES:
+        assert f'"{stage}"' in page

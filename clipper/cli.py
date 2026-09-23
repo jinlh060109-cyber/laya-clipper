@@ -59,6 +59,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default=None, choices=DEVICES, help=DEVICE_HELP)
     p.add_argument("--run"); p.add_argument("--vertical", action="store_true")
     p.add_argument("--model", default="large-v3")
+    p = sub.add_parser("web")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true")
     return parser
 
 
@@ -86,6 +89,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.command:
         parser.print_usage()
         return 2
+
+    if args.command == "web":
+        import webbrowser
+
+        from clipper.web import server as web_server
+
+        srv = web_server.make_server(RUNS_DIR, port=args.port)
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        print(f"Clipper is running at {url}  (Ctrl+C to stop)")
+        if not args.no_browser:
+            webbrowser.open(url)
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            srv.server_close()
+        return 0
 
     try:
         if args.command == "ingest":

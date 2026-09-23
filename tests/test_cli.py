@@ -95,3 +95,42 @@ def test_all_builds_windows_before_scoring(tmp_path, monkeypatch):
     monkeypatch.setattr("clipper.cli.run_score", fake_score)
     assert main(["all", "video.mp4", "--profile", "podcast"]) == 0
     assert scored["windows"]
+
+
+def test_web_serves_until_interrupted_and_prints_its_url(capsys, monkeypatch):
+    opened = []
+
+    class FakeServer:
+        server_address = ("127.0.0.1", 9999)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            opened.append("closed")
+
+    monkeypatch.setattr("clipper.web.server.make_server",
+                        lambda runs_dir, port=8765, runner=None: FakeServer())
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
+    assert main(["web", "--port", "9999"]) == 0
+    assert "http://127.0.0.1:9999" in capsys.readouterr().out
+    assert opened == ["http://127.0.0.1:9999", "closed"]
+
+
+def test_web_no_browser_does_not_open_one(monkeypatch):
+    opened = []
+
+    class FakeServer:
+        server_address = ("127.0.0.1", 8765)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr("clipper.web.server.make_server",
+                        lambda runs_dir, port=8765, runner=None: FakeServer())
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
+    assert main(["web", "--no-browser"]) == 0
+    assert opened == []

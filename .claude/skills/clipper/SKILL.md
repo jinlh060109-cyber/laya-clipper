@@ -17,6 +17,19 @@ the transcript, and you write `plan.json`.
 Read candidates first. Only pull transcript slices for candidates you are
 seriously considering; do not read the whole transcript.
 
+## Run settings
+
+If `runs/<name>/settings.json` exists, the run was started from the web page.
+Read it before choosing clips:
+
+- `prompt`: what the user is looking for. Let it steer which candidates you
+  pick and how you trim. It outranks the default ranking order, never the
+  trimming rules or the 10s minimum.
+- `vertical`: set `"vertical"` on every clip to this value.
+- `profile_chosen`: the profile the run was scored with. Copy it into
+  `plan.json` as `"profile"`. If `profile_fallback` is true, Laya could not
+  tell the content type; tell the user which profile was used.
+
 ## What each signal means
 
 Every signal and composite is on a 0..1 scale.
@@ -52,6 +65,8 @@ Under 10s is rejected outright. Over 60s needs a reason.
 
 Laya flagged these as low-confidence. Read their transcript slices and decide
 yourself. Do not skip the bucket; that is where the model deferred to you.
+Their composites may sit below the candidate threshold: when Laya is unsure,
+its low score is no more trustworthy than a high one would be.
 
 ## Output
 

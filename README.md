@@ -28,6 +28,15 @@ ffmpeg must be on PATH and must include libass. Check:
 
 ## Use
 
+The easiest way in is the web page:
+
+    clipper web
+
+It opens in your browser. Drop a video, pick the settings, press Start. When
+scoring finishes, ask Claude to plan the run, then render it.
+
+Or from the command line:
+
     clipper all "episode47.mp4" --profile podcast --vertical
 
 Then ask Claude to run the plan stage, and:

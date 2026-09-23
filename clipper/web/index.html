@@ -1,3 +1,250 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Clipper</title></head>
-<body><p>Clipper</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipper</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6a66;
+    --line: #dddbd5; --accent: #d9480f; --accent-soft: #fff0e8;
+    --ok: #2b8a3e; --bad: #c92a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --panel: #1f1f1d; --text: #ecebe7; --muted: #9a9892;
+      --line: #34332f; --accent: #ff7a3d; --accent-soft: #2b1d15;
+      --ok: #69db7c; --bad: #ff8787;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 36px 16px;
+          text-align: center; cursor: pointer; color: var(--muted); }
+  #drop.over, #drop:focus-visible { border-color: var(--accent); background: var(--accent-soft);
+                                    outline: none; }
+  #drop strong { color: var(--text); display: block; font-size: 16px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  select, textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg);
+                     border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  textarea { min-height: 72px; resize: vertical; }
+  .toggle { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 15px; }
+  .full { grid-column: 1 / -1; }
+  .warn { color: var(--bad); font-size: 13px; margin-top: 4px; }
+  button { font: inherit; font-weight: 600; background: var(--accent); color: #fff;
+           border: 0; border-radius: 8px; padding: 10px 22px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; justify-content: space-between; padding: 8px 0;
+       border-bottom: 1px solid var(--line); }
+  li:last-child { border-bottom: 0; }
+  .st { font-size: 13px; color: var(--muted); }
+  .st.running { color: var(--accent); } .st.done { color: var(--ok); }
+  .st.failed { color: var(--bad); font-weight: 600; }
+  #error { color: var(--bad); white-space: pre-wrap; }
+  #summary p { margin: 6px 0; } code { font-size: 13px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Clipper</h1>
+  <p class="sub">Drop a video, pick your settings, and Laya finds the clip-worthy moments.</p>
+
+  <section class="panel">
+    <div id="drop" tabindex="0" role="button" aria-label="Choose a video file">
+      <strong id="drop-title">Drop a video here</strong>
+      <span id="drop-hint">or click to choose a file</span>
+    </div>
+    <input id="file" type="file" accept="video/*,.mkv" hidden>
+  </section>
+
+  <section class="panel grid">
+    <div>
+      <label for="profile">Video type</label>
+      <select id="profile"></select>
+    </div>
+    <div>
+      <label for="device">Device</label>
+      <select id="device"></select>
+    </div>
+    <div>
+      <label for="model">Whisper model</label>
+      <select id="model"></select>
+    </div>
+    <div>
+      <label>&nbsp;</label>
+      <label class="toggle"><input id="vertical" type="checkbox" checked> Vertical 9:16</label>
+      <label class="toggle"><input id="diarize" type="checkbox" checked> Speaker diarization</label>
+      <div id="hf-warn" class="warn" hidden>No HF_TOKEN in .env, so diarization is off.</div>
+    </div>
+    <div class="full">
+      <label for="prompt">What are you looking for? (optional)</label>
+      <textarea id="prompt" placeholder="e.g. funny moments, skip the sponsor read"></textarea>
+    </div>
+    <div class="full"><button id="start" disabled>Start</button></div>
+  </section>
+
+  <section id="progress" class="panel" hidden>
+    <ol id="stages"></ol>
+    <p id="error" hidden></p>
+    <div id="summary" hidden></div>
+  </section>
+</main>
+
+<script>
+const STAGES = [
+  ["upload", "Upload"], ["ingest", "Read video"], ["transcribe", "Transcribe"],
+  ["windows", "Split into windows"], ["profile", "Pick video type"], ["score", "Score with Laya"],
+];
+const $ = (id) => document.getElementById(id);
+let file = null;
+let polling = null;
+
+function option(select, value, label) {
+  const o = document.createElement("option");
+  o.value = value; o.textContent = label; select.appendChild(o);
+}
+
+async function loadConfig() {
+  const config = await (await fetch("/api/config")).json();
+  config.profiles.forEach((p) => option($("profile"), p.id, p.label));
+  config.devices.forEach((d) => option($("device"), d, d));
+  config.models.forEach((m) => option($("model"), m, m));
+  if (!config.hf_token) { $("diarize").checked = false; $("hf-warn").hidden = false; }
+}
+
+function setFile(f) {
+  if (!f) return;
+  file = f;
+  $("drop-title").textContent = f.name;
+  $("drop-hint").textContent = (f.size / 1048576).toFixed(1) + " MB · click to change";
+  $("start").disabled = false;
+}
+
+function buildStages() {
+  const list = $("stages");
+  list.textContent = "";
+  for (const [id, label] of STAGES) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    const st = document.createElement("span");
+    name.textContent = label; st.id = "st-" + id; st.className = "st"; st.textContent = "pending";
+    li.append(name, st); list.appendChild(li);
+  }
+  $("progress").hidden = false; $("error").hidden = true; $("summary").hidden = true;
+}
+
+function setStage(id, state, text) {
+  const el = $("st-" + id);
+  el.className = "st " + state; el.textContent = text || state;
+}
+
+function showError(message) { $("error").textContent = message; $("error").hidden = false; }
+
+function upload(f) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", "/api/upload?name=" + encodeURIComponent(f.name));
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) setStage("upload", "running", Math.floor(100 * e.loaded / e.total) + "%");
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch (_) {}
+      xhr.status === 200 ? resolve(body.run) : reject(new Error(body.error || "Upload failed."));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed: the server could not be reached."));
+    xhr.send(f);
+  });
+}
+
+function settings(run) {
+  return { run, profile: $("profile").value, device: $("device").value, model: $("model").value,
+           diarize: $("diarize").checked, vertical: $("vertical").checked, prompt: $("prompt").value };
+}
+
+async function start() {
+  $("start").disabled = true;
+  buildStages();
+  setStage("upload", "running", "0%");
+  try {
+    const run = await upload(file);
+    setStage("upload", "done");
+    const response = await fetch("/api/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings(run)),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Could not start.");
+    render(body); poll();
+  } catch (error) {
+    setStage("upload", "failed");
+    showError(error.message);
+    $("start").disabled = false;
+  }
+}
+
+function render(status) {
+  if (status.state === "idle") return;
+  if ($("stages").children.length === 0) buildStages();
+  for (const [id] of STAGES) setStage(id, status.stages[id]);
+  if (status.state === "failed") {
+    const label = (STAGES.find(([id]) => id === status.failed_stage) || [, "A stage"])[1];
+    showError(label + " failed: " + status.error);
+  }
+  if (status.state === "done") summarize(status);
+  $("start").disabled = status.state === "running" || !file;
+}
+
+function summarize(status) {
+  const s = $("summary");
+  s.textContent = "";
+  const line = (text) => { const p = document.createElement("p"); p.textContent = text; s.appendChild(p); return p; };
+  let profile = "Profile: " + status.profile;
+  if (status.votes) {
+    const votes = Object.entries(status.votes).filter(([, n]) => n > 0).map(([k, n]) => k + " " + n).join(", ");
+    profile += status.fallback ? " (Laya could not tell, so it fell back to this)" : " (Laya's votes: " + votes + ")";
+  }
+  line(profile);
+  const r = status.result || {};
+  line(r.candidates + " candidates, " + r.uncertain + " uncertain, " + r.failed + " failed windows, scored on " + r.device + ".");
+  const folder = line("Run folder: ");
+  const code = document.createElement("code"); code.textContent = status.run_dir; folder.appendChild(code);
+  line("Next: ask Claude to plan this run.");
+  s.hidden = false;
+}
+
+function poll() {
+  clearInterval(polling);
+  polling = setInterval(async () => {
+    const status = await (await fetch("/api/status")).json();
+    render(status);
+    if (status.state !== "running") clearInterval(polling);
+  }, 1000);
+}
+
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+drop.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); setFile(e.dataTransfer.files[0]); });
+$("file").addEventListener("change", (e) => setFile(e.target.files[0]));
+$("start").addEventListener("click", start);
+
+loadConfig().then(async () => {
+  const status = await (await fetch("/api/status")).json();
+  if (status.state !== "idle") { render(status); if (status.state === "running") poll(); }
+});
+</script>
+</body>
+</html>
