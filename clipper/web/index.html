@@ -8,20 +8,21 @@
   :root {
     --bg: #f6f5f2; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6a66;
     --line: #dddbd5; --accent: #d9480f; --accent-soft: #fff0e8;
-    --ok: #2b8a3e; --bad: #c92a2a;
+    --ok: #2b8a3e; --bad: #c92a2a; --bar: #e9e7e1;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #151514; --panel: #1f1f1d; --text: #ecebe7; --muted: #9a9892;
       --line: #34332f; --accent: #ff7a3d; --accent-soft: #2b1d15;
-      --ok: #69db7c; --bad: #ff8787;
+      --ok: #69db7c; --bad: #ff8787; --bar: #2c2b28;
     }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
   .sub { color: var(--muted); margin: 0 0 24px; }
   .panel { background: var(--panel); border: 1px solid var(--line);
            border-radius: 10px; padding: 20px; margin-bottom: 16px; }
@@ -31,33 +32,52 @@
                                     outline: none; }
   #drop strong { color: var(--text); display: block; font-size: 16px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
-  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
-  select, textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg);
-                     border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  select, textarea, input[type=number] { width: 100%; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
   textarea { min-height: 72px; resize: vertical; }
   .toggle { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 15px; }
   .full { grid-column: 1 / -1; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
   .warn { color: var(--bad); font-size: 13px; margin-top: 4px; }
   button { font: inherit; font-weight: 600; background: var(--accent); color: #fff;
            border: 0; border-radius: 8px; padding: 10px 22px; cursor: pointer; }
+  button.quiet { background: transparent; color: var(--accent); border: 1px solid var(--line);
+                 padding: 6px 12px; font-weight: 500; }
   button:disabled { opacity: .45; cursor: not-allowed; }
   ol { list-style: none; margin: 0; padding: 0; }
-  li { display: flex; justify-content: space-between; padding: 8px 0;
-       border-bottom: 1px solid var(--line); }
-  li:last-child { border-bottom: 0; }
+  #stages li { display: flex; justify-content: space-between; padding: 8px 0;
+               border-bottom: 1px solid var(--line); }
+  #stages li:last-child { border-bottom: 0; }
   .st { font-size: 13px; color: var(--muted); }
   .st.running { color: var(--accent); } .st.done { color: var(--ok); }
   .st.failed { color: var(--bad); font-weight: 600; }
   #error { color: var(--bad); white-space: pre-wrap; }
-  #summary p { margin: 6px 0; } code { font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px;
+       padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.off td { color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .meter { width: 64px; height: 6px; background: var(--bar); border-radius: 3px; margin-top: 6px; }
+  .meter span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 9px;
+         border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
+  video { width: 100%; max-height: 360px; background: #000; border-radius: 8px; }
+  #results { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+  .result video { max-height: 420px; }
+  .result p { margin: 6px 0 0; font-size: 14px; }
+  .result a { color: var(--accent); font-size: 13px; margin-right: 10px; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>Clipper</h1>
-  <p class="sub">Drop a video, pick your settings, and Laya finds the clip-worthy moments.</p>
+  <p class="sub">Drop a long video. The AI reads it and proposes clips, Laya scores them,
+    you pick, and every clip is cut and edited in your style.</p>
 
   <section class="panel">
     <div id="drop" tabindex="0" role="button" aria-label="Choose a video file">
@@ -69,86 +89,178 @@
 
   <section class="panel grid">
     <div>
-      <label for="profile">Video type</label>
-      <select id="profile"></select>
-    </div>
-    <div>
-      <label for="device">Device</label>
+      <label for="device">Hardware for Whisper and Laya</label>
       <select id="device"></select>
+      <div id="device-detail" class="hint"></div>
     </div>
     <div>
       <label for="model">Whisper model</label>
       <select id="model"></select>
+      <div class="hint">large-v3 is the most accurate; small is fastest.</div>
+    </div>
+    <div>
+      <label for="top">Clips to keep</label>
+      <input id="top" type="number" min="1" max="30" value="5">
     </div>
     <div>
       <label>&nbsp;</label>
-      <label class="toggle"><input id="vertical" type="checkbox" checked> Vertical 9:16</label>
-      <label class="toggle"><input id="diarize" type="checkbox" checked> Speaker diarization</label>
-      <div id="hf-warn" class="warn" hidden>No HF_TOKEN in .env, so diarization is off.</div>
+      <label class="toggle"><input id="diarize" type="checkbox" checked> Tell speakers apart</label>
+      <div id="hf-warn" class="warn" hidden>No HF_TOKEN in .env, so all speech is one speaker.</div>
     </div>
     <div class="full">
       <label for="prompt">What are you looking for? (optional)</label>
-      <textarea id="prompt" placeholder="e.g. funny moments, skip the sponsor read"></textarea>
+      <textarea id="prompt" placeholder="e.g. useful tips, funny moments, skip the sponsor read"></textarea>
+      <div id="ai-status" class="hint"></div>
     </div>
-    <div class="full"><button id="start" disabled>Start</button></div>
+    <div class="full"><button id="analyze" disabled>Analyze</button></div>
   </section>
 
   <section id="progress" class="panel" hidden>
+    <h2 id="progress-title">Progress</h2>
     <ol id="stages"></ol>
     <p id="error" hidden></p>
-    <div id="summary" hidden></div>
+  </section>
+
+  <section id="preview" class="panel" hidden>
+    <h2>Pick your clips</h2>
+    <p id="preview-summary" class="hint"></p>
+    <video id="player" controls preload="metadata" hidden></video>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Make</th><th>Time</th><th>Clip</th><th>Score</th><th>Confidence</th>
+          <th title="Let the AI write the title, hook and punch-ins for this clip">AI fill-in</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="style" class="panel grid" hidden>
+    <h2 class="full">Your style (used for every clip)</h2>
+    <div>
+      <label for="layout">Layout</label>
+      <select id="layout">
+        <option value="fit">Fit: keep the whole picture over a blurred background</option>
+        <option value="crop">Crop: fill the screen (cuts the sides)</option>
+      </select>
+    </div>
+    <div>
+      <label for="encoder">Video encoder</label>
+      <select id="encoder"></select>
+    </div>
+    <div>
+      <label for="captions">Captions</label>
+      <select id="captions">
+        <option value="burn">Burned into the video</option>
+        <option value="sidecar">Separate .srt file only</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+    <div>
+      <label for="caption_case">Caption letters</label>
+      <select id="caption_case">
+        <option value="sentence">As spoken (Sentence case)</option>
+        <option value="upper">UPPERCASE</option>
+      </select>
+    </div>
+    <div class="full">
+      <label class="toggle"><input id="vertical" type="checkbox" checked> Vertical 9:16</label>
+    </div>
+    <div class="full">
+      <label for="notes">Style notes: tone, pacing, brand rules</label>
+      <textarea id="notes" placeholder="e.g. Energetic, cut every pause, always call viewers 'the crew', no swearing in captions"></textarea>
+      <div class="hint">Written once and reused. Every clip's edit prompt carries these notes word for word.</div>
+    </div>
+    <div class="full"><button id="make" disabled>Make clips</button>
+      <button id="save-style" class="quiet">Save style</button> <span id="saved" class="hint"></span></div>
+  </section>
+
+  <section id="done" class="panel" hidden>
+    <h2>Your clips</h2>
+    <p class="hint">Each folder also holds <code>prompt.md</code> and <code>edit.json</code>:
+      the edit instructions an AI editor can apply on top.</p>
+    <div id="results"></div>
   </section>
 </main>
 
 <script>
-const STAGES = [
-  ["upload", "Upload"], ["ingest", "Read video"], ["transcribe", "Transcribe"],
-  ["windows", "Split into windows"], ["action", "Find action without speech"],
-  ["profile", "Pick video type"], ["score", "Score with Laya"],
-];
+const LABELS = {
+  "upload": "Upload", "ingest": "Read the video", "transcribe": "Transcribe (Whisper)",
+  "segment": "AI proposes clips and questions", "rate": "Laya scores the clips",
+  "action": "Find action without speech", "select": "Pick clips for the preview",
+  "style": "Apply your style", "fillin": "AI fill-in", "edit": "Cut and edit the clips",
+};
 const $ = (id) => document.getElementById(id);
-let file = null;
-let polling = null;
+let file = null, config = null, current = null, polling = null, aiReady = false;
 
-function option(select, value, label) {
+function option(select, value, label, disabled) {
   const o = document.createElement("option");
-  o.value = value; o.textContent = label; select.appendChild(o);
+  o.value = value; o.textContent = label; o.disabled = !!disabled; select.appendChild(o);
 }
+const clock = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+const json = async (url, options) => {
+  const response = await fetch(url, options);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || response.statusText);
+  return body;
+};
 
 async function loadConfig() {
-  const config = await (await fetch("/api/config")).json();
-  config.profiles.forEach((p) => option($("profile"), p.id, p.label));
-  config.devices.forEach((d) => option($("device"), d, d));
+  config = await json("/api/config");
+  for (const d of config.hardware.devices)
+    option($("device"), d.id, d.label + (d.available ? "" : " (not found)"), !d.available);
+  for (const e of config.hardware.encoders)
+    option($("encoder"), e.id, e.label + (e.available ? "" : " (not available)"), !e.available);
   config.models.forEach((m) => option($("model"), m, m));
+  showDevice();
   if (!config.hf_token) { $("diarize").checked = false; $("hf-warn").hidden = false; }
+  const ai = config.ai;
+  aiReady = !!ai.active;
+  $("ai-status").textContent = ai.error ? "AI setup problem: " + ai.error
+    : ai.active ? "The AI (" + ai.active.provider + ", " + ai.active.model + ") reads the transcript and proposes the clips."
+    : "No AI configured: the transcript is cut into sentence-aligned chunks. Set ANTHROPIC_API_KEY in .env to let Claude pick clips.";
+  $("ai-status").className = ai.error ? "warn" : "hint";
+  applyStyle(config.style);
 }
+
+function showDevice() {
+  const d = config.hardware.devices.find((x) => x.id === $("device").value);
+  $("device-detail").textContent = d ? (d.detail || "") : "";
+}
+
+function applyStyle(s) {
+  for (const key of ["layout", "captions", "caption_case", "encoder", "notes"]) $(key).value = s[key];
+  $("vertical").checked = s.vertical;
+}
+const styleNow = () => ({ layout: $("layout").value, captions: $("captions").value,
+  caption_case: $("caption_case").value, encoder: $("encoder").value,
+  vertical: $("vertical").checked, notes: $("notes").value });
 
 function setFile(f) {
   if (!f) return;
   file = f;
   $("drop-title").textContent = f.name;
   $("drop-hint").textContent = (f.size / 1048576).toFixed(1) + " MB · click to change";
-  $("start").disabled = false;
+  $("analyze").disabled = false;
 }
 
-function buildStages() {
+function buildStages(names, title) {
+  $("progress-title").textContent = title;
   const list = $("stages");
   list.textContent = "";
-  for (const [id, label] of STAGES) {
+  for (const id of names) {
     const li = document.createElement("li");
     const name = document.createElement("span");
     const st = document.createElement("span");
-    name.textContent = label; st.id = "st-" + id; st.className = "st"; st.textContent = "pending";
+    name.textContent = LABELS[id]; st.id = "st-" + id; st.className = "st"; st.textContent = "pending";
     li.append(name, st); list.appendChild(li);
   }
-  $("progress").hidden = false; $("error").hidden = true; $("summary").hidden = true;
+  $("progress").hidden = false; $("error").hidden = true;
 }
 
 function setStage(id, state, text) {
   const el = $("st-" + id);
-  el.className = "st " + state; el.textContent = text || state;
+  if (el) { el.className = "st " + state; el.textContent = text || state; }
 }
-
 function showError(message) { $("error").textContent = message; $("error").hidden = false; }
 
 function upload(f) {
@@ -168,76 +280,150 @@ function upload(f) {
   });
 }
 
-function settings(run) {
-  return { run, profile: $("profile").value, device: $("device").value, model: $("model").value,
-           diarize: $("diarize").checked, vertical: $("vertical").checked, prompt: $("prompt").value };
-}
-
-async function start() {
-  $("start").disabled = true;
-  buildStages();
+async function analyze() {
+  $("analyze").disabled = true;
+  $("preview").hidden = $("style").hidden = $("done").hidden = true;
+  buildStages(["upload", "ingest", "transcribe", "segment", "rate", "action", "select"], "Analyzing");
   setStage("upload", "running", "0%");
-  let uploaded = false;
   try {
     const run = await upload(file);
-    uploaded = true;
     setStage("upload", "done");
-    const response = await fetch("/api/start", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(settings(run)),
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Could not start.");
+    const body = await json("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run, device: $("device").value, model: $("model").value,
+        diarize: $("diarize").checked, prompt: $("prompt").value,
+        top_n: Math.max(1, Math.min(30, parseInt($("top").value, 10) || 5)) }) });
     render(body); poll();
   } catch (error) {
-    if (!uploaded) setStage("upload", "failed");
+    setStage("upload", "failed");
     showError(error.message);
-    $("start").disabled = false;
+    $("analyze").disabled = false;
   }
 }
 
 function render(status) {
   if (status.state === "idle") return;
-  if ($("stages").children.length === 0) buildStages();
-  for (const [id] of STAGES) setStage(id, status.stages[id]);
+  current = status.run;
+  const names = Object.keys(status.stages);
+  if (!$("st-" + names[names.length - 1]) || $("stages").children.length !== names.length)
+    buildStages(names, status.kind === "make" ? "Making clips" : "Analyzing");
+  for (const id of names) setStage(id, status.stages[id]);
   const p = status.progress;
   if (p && status.stages[p.stage] === "running") setStage(p.stage, "running", p.done + "/" + p.total);
   if (status.state === "failed") {
-    const label = (STAGES.find(([id]) => id === status.failed_stage) || [, "A stage"])[1];
-    showError(label + " failed: " + status.error);
+    showError((LABELS[status.failed_stage] || "A step") + " failed: " + status.error);
   }
-  if (status.state === "done") summarize(status);
-  $("start").disabled = status.state === "running" || !file;
+  const running = status.state === "running";
+  $("analyze").disabled = running || !file;
+  $("make").disabled = running;
+  if (!running && status.state === "done") loadPreview(status.run, status.kind === "make");
 }
 
-function summarize(status) {
-  const s = $("summary");
-  s.textContent = "";
-  const line = (text) => { const p = document.createElement("p"); p.textContent = text; s.appendChild(p); return p; };
-  let profile = "Profile: " + status.profile;
-  if (status.votes) {
-    const votes = Object.entries(status.votes).filter(([, n]) => n > 0).map(([k, n]) => k + " " + n).join(", ");
-    profile += status.fallback ? " (Laya could not tell, so it fell back to this)" : " (Laya's votes: " + votes + ")";
-  } else if (status.fallback) {
-    profile += " (nobody speaks, so gameplay was assumed)";
+async function loadPreview(run, showMade) {
+  const data = await json("/api/selection?run=" + encodeURIComponent(run));
+  const ai = data.ai ? "Clips proposed by " + data.ai.provider + " (" + data.ai.model + ")"
+    : data.ai_error ? "The AI step failed (" + data.ai_error + "), so the video was cut into chunks"
+    : "No AI: the video was cut into sentence-aligned chunks";
+  const asked = data.questions.map((q) => q.id.replace(/_/g, " ")).join(", ");
+  $("preview-summary").textContent = ai + ". Video type: " + (data.content_type || "unknown") +
+    ". Laya answered: " + asked + ".";
+  const player = $("player");
+  const rows = $("rows");
+  rows.textContent = "";
+  for (const clip of data.clips) {
+    const tr = document.createElement("tr");
+    tr.dataset.id = clip.id;
+    tr.className = clip.include ? "" : "off";
+    const include = document.createElement("input");
+    include.type = "checkbox"; include.checked = clip.include; include.className = "include";
+    include.addEventListener("change", () => { tr.className = include.checked ? "" : "off"; });
+    const fill = document.createElement("input");
+    fill.type = "checkbox"; fill.checked = clip.fill_in; fill.className = "fill";
+    fill.disabled = !aiReady; if (!aiReady) fill.title = "Needs an AI configured in .env";
+    const play = document.createElement("button");
+    play.className = "quiet"; play.textContent = "▶ " + clock(clip.start) + "–" + clock(clip.end);
+    play.addEventListener("click", () => {
+      player.hidden = false;
+      player.src = "/media/" + encodeURIComponent(run) + "/" + encodeURIComponent(data.video) +
+        "#t=" + clip.start + "," + clip.end;
+      player.play();
+    });
+    const title = document.createElement("div");
+    title.textContent = clip.title_hint;
+    const meta = document.createElement("div");
+    meta.className = "hint";
+    meta.textContent = clip.category + (clip.reason ? " · " + clip.reason : "");
+    if (clip.uncertain) { const tag = document.createElement("span"); tag.className = "tag";
+      tag.textContent = "Laya unsure"; meta.appendChild(tag); }
+    const score = document.createElement("div");
+    score.className = "num"; score.textContent = clip.score.toFixed(2);
+    const meter = document.createElement("div"); meter.className = "meter";
+    const bar = document.createElement("span"); bar.style.width = Math.round(clip.score * 100) + "%";
+    meter.appendChild(bar); score.appendChild(meter);
+    const cells = [include, play, [title, meta], score,
+                   clip.source === "action" ? "–" : clip.confidence.toFixed(2), fill];
+    for (const content of cells) {
+      const td = document.createElement("td");
+      if (Array.isArray(content)) td.append(...content);
+      else if (content instanceof Node) td.appendChild(content);
+      else { td.textContent = content; td.className = "num"; }
+      tr.appendChild(td);
+    }
+    rows.appendChild(tr);
   }
-  line(profile);
-  const r = status.result || {};
-  if (r.device === "none") line("Nobody speaks in this video, so Laya had nothing to score.");
-  else line(r.candidates + " candidates, " + r.uncertain + " uncertain, " + r.failed + " failed windows, scored on " + r.device + ".");
-  if (r.action_candidates !== undefined) {
-    line(r.action_candidates + " action moments from " + (r.silent_seconds / 60).toFixed(1) + " min without speech.");
+  $("preview").hidden = $("style").hidden = false;
+  $("make").disabled = false;
+  if (showMade) showResults(run, data.made);
+}
+
+function showResults(run, made) {
+  const box = $("results");
+  box.textContent = "";
+  for (const clip of made) {
+    const card = document.createElement("div");
+    card.className = "result";
+    const base = "/media/" + encodeURIComponent(run) + "/clips/" + encodeURIComponent(clip.folder) + "/";
+    const video = document.createElement("video");
+    video.controls = true; video.preload = "metadata"; video.src = base + "final.mp4";
+    const title = document.createElement("p");
+    title.textContent = clip.title + " (" + clip.duration + " s)";
+    const links = document.createElement("p");
+    for (const [name, label] of [["prompt.md", "Edit prompt"], ["edit.json", "edit.json"], ["cut.mp4", "Raw cut"]]) {
+      const a = document.createElement("a"); a.href = base + name; a.target = "_blank";
+      a.textContent = label; links.appendChild(a);
+    }
+    card.append(video, title, links);
+    box.appendChild(card);
   }
-  const folder = line("Run folder: ");
-  const code = document.createElement("code"); code.textContent = status.run_dir; folder.appendChild(code);
-  line("Next: ask Claude to plan this run.");
-  s.hidden = false;
+  $("done").hidden = made.length === 0;
+}
+
+async function make() {
+  $("make").disabled = true;
+  $("done").hidden = true;
+  const choices = [...$("rows").children].map((tr) => ({ id: tr.dataset.id,
+    include: tr.querySelector(".include").checked, fill_in: tr.querySelector(".fill").checked }));
+  try {
+    const body = await json("/api/make", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run: current, choices, style: styleNow() }) });
+    render(body); poll();
+  } catch (error) {
+    showError(error.message);
+    $("make").disabled = false;
+  }
+}
+
+async function saveStyle() {
+  try {
+    applyStyle(await json("/api/style", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(styleNow()) }));
+    $("saved").textContent = "Saved.";
+  } catch (error) { $("saved").textContent = error.message; }
 }
 
 function poll() {
   clearInterval(polling);
   polling = setInterval(async () => {
-    const status = await (await fetch("/api/status")).json();
+    const status = await json("/api/status");
     render(status);
     if (status.state !== "running") clearInterval(polling);
   }, 1000);
@@ -250,10 +436,13 @@ drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.ad
 drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); setFile(e.dataTransfer.files[0]); });
 $("file").addEventListener("change", (e) => setFile(e.target.files[0]));
-$("start").addEventListener("click", start);
+$("device").addEventListener("change", showDevice);
+$("analyze").addEventListener("click", analyze);
+$("make").addEventListener("click", make);
+$("save-style").addEventListener("click", saveStyle);
 
 loadConfig().then(async () => {
-  const status = await (await fetch("/api/status")).json();
+  const status = await json("/api/status");
   if (status.state !== "idle") { render(status); if (status.state === "running") poll(); }
 });
 </script>
