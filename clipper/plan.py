@@ -11,6 +11,8 @@ LENGTH_TARGETS: dict[str, tuple[float, float]] = {
     "how_to": (25.0, 40.0),
     "list": (25.0, 40.0),
     "story_arc": (30.0, 45.0),
+    # Gameplay with nobody speaking: judged from frames, not from Laya.
+    "action": (15.0, 30.0),
 }
 HARD_MIN = 10.0
 SOFT_MAX = 60.0

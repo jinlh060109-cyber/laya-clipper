@@ -103,3 +103,9 @@ def test_soft_warnings_are_not_errors():
 def test_an_explicit_null_laya_model_is_not_warned_about():
     plan = {"laya_model": None, "clips": [{"in": 0, "out": 20, "title": "t"}]}
     assert not any("laya_model" in p for p in validate_plan(plan, 100.0))
+
+
+def test_action_clips_have_a_15_to_30s_target():
+    plan = {"laya_model": None,
+            "clips": [{"in": 0, "out": 40, "title": "t", "clip_format": "action"}]}
+    assert any("action target" in p for p in validate_plan(plan, 100.0))

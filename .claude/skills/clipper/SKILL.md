@@ -13,6 +13,7 @@ the transcript, and you write `plan.json`.
 - `runs/<name>/candidates.json` — ranked candidates plus an `uncertain` bucket.
 - `runs/<name>/transcript.json` — word-level timings. Trim against these.
 - `runs/<name>/source.json` — duration, resolution.
+- `runs/<name>/action.json` — moments without speech, with a frame sheet each.
 
 Read candidates first. Only pull transcript slices for candidates you are
 seriously considering; do not read the whole transcript.
@@ -72,6 +73,21 @@ Laya flagged these as low-confidence. Read their transcript slices and decide
 yourself. Do not skip the bucket; that is where the model deferred to you.
 Their composites may sit below the candidate threshold: when Laya is unsure,
 its low score is no more trustworthy than a high one would be.
+
+## Action moments (no speech)
+
+If `runs/<name>/action.json` has candidates, these are stretches where nobody
+speaks, found from loudness, on-screen motion and scene cuts. Laya never saw
+them. For each one, Read its `sheet` image: six frames, left to right, top row
+first, taken at `sheet_times`. Judge them like an editor: keep clutch plays,
+fights, deaths, big reveals and anything a viewer would rewind; drop menus,
+loading screens, cutscenes and walking around. Their `signals` only say it was
+loud and busy, not that it was good.
+
+Clips taken from them use `clip_format: "action"` (15-30s), no `laya` object,
+and `captions: "none"` unless someone speaks in the range. Write the title from
+what is on screen. For a video with no speech at all, set `"laya_model": null`
+in `plan.json`.
 
 ## Output
 

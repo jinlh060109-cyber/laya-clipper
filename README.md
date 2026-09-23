@@ -48,6 +48,14 @@ Profiles: `podcast`, `talking_head`, `lecture`, `stream`.
 Re-scoring with a different profile reuses the cached transcript and windows;
 only the Laya pass runs again.
 
+Gameplay without commentary works too. Laya only reads speech, so the
+`action` stage finds stretches of 8 s or more where nobody talks, ranks them
+by loudness, on-screen motion and scene cuts, and saves a sheet of six frames
+for each of the best ones in `runs/<name>/frames/`. Claude looks at those
+sheets during the plan stage. Re-run just that stage with:
+
+    clipper action runs/2026-09-21-episode47
+
 ## Tests
 
     pytest              # offline; no model download
