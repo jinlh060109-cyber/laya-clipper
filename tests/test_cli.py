@@ -236,3 +236,33 @@ def test_action_says_so_when_there_is_no_silence(tmp_path, monkeypatch, capsys):
                         {"silent_seconds": 0.0, "spans": 0, "candidates": 0})
     assert main(["action", str(run.root)]) == 0
     assert "No stretch of 8 s or more without speech" in capsys.readouterr().out
+
+
+def test_transcribe_takes_a_device(tmp_path, monkeypatch):
+    from clipper.run import Run
+    run = Run.create(tmp_path, "ep")
+    seen = []
+    monkeypatch.setattr("clipper.cli.transcribe",
+                        lambda wav, r, model, device=None, hf_token=None:
+                        seen.append(device) or {"segments": [], "diarized": False})
+    assert main(["transcribe", str(run.root), "--device", "xpu", "--no-diarize"]) == 0
+    assert seen == ["xpu"]
+
+
+def test_all_transcribes_on_its_device(tmp_path, monkeypatch):
+    from clipper.run import Run
+    run = Run.create(tmp_path, "ep")
+    run.write_json("source.json", {"duration": 1.0})
+    run.write_json("windows.json", {"windows": []})
+    seen = []
+
+    def fake(video, name, model, diarize=True, device=None):
+        seen.append(device)
+        return run
+
+    monkeypatch.setattr("clipper.cli._ingest_and_transcribe", fake)
+    monkeypatch.setattr("clipper.cli.run_action", lambda r, progress=None: ACTION)
+    monkeypatch.setattr("clipper.cli.run_score", lambda r, p, device=None, agent=None,
+                        progress=None: SUMMARY)
+    assert main(["all", "video.mp4", "--profile", "podcast", "--device", "xpu"]) == 0
+    assert seen == ["xpu"]

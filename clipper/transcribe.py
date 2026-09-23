@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from clipper.device import resolve_device
 from clipper.run import Run
 
 DEFAULT_SPEAKER = "SPEAKER_00"
+SAMPLE_RATE = 16000
 
 
 def _fill_timings(words: list[dict], seg_start: float, seg_end: float) -> list[dict]:
@@ -63,17 +65,69 @@ def normalize_transcript(result: dict, model: str, diarized: bool, language: str
             "diarized": diarized, "segments": out_segments}
 
 
-def transcribe(wav: Path, run: Run, model: str = "large-v3",
-               device: str | None = None, hf_token: str | None = None) -> dict:
-    import torch
+def segments_from_chunks(chunks: list[dict], texts: list[str]) -> list[dict]:
+    """Pair each voice chunk with what Whisper heard in it, like whisperx does."""
+    return [{"start": chunk["start"], "end": chunk["end"], "text": text}
+            for chunk, text in zip(chunks, texts) if text.strip()]
+
+
+def _faster_whisper_asr(audio, model: str, device: str) -> dict:
     import whisperx
 
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     compute_type = "float16" if device == "cuda" else "int8"
-
-    audio = whisperx.load_audio(str(wav))
     asr = whisperx.load_model(model, device, compute_type=compute_type)
-    result = asr.transcribe(audio, batch_size=16)
+    return asr.transcribe(audio, batch_size=16)
+
+
+def _transformers_asr(audio, model: str, device: str, batch_size: int = 8) -> dict:
+    """Whisper for GPUs CTranslate2 cannot use (Intel Arc, Apple). The same
+    recipe as whisperx: cut the audio into <=30 s voice chunks, then
+    transcribe the chunks in batches."""
+    import torch
+    from transformers import AutoProcessor, WhisperForConditionalGeneration
+    from whisperx.vads import Pyannote
+
+    vad_options = {"onset": 0.500, "offset": 0.363}
+    vad = Pyannote(torch.device(device), token=None, vad_onset=vad_options["onset"],
+                   vad_offset=vad_options["offset"])
+    chunks = Pyannote.merge_chunks(
+        vad({"waveform": Pyannote.preprocess_audio(audio), "sample_rate": SAMPLE_RATE}),
+        30, **vad_options)
+
+    processor = AutoProcessor.from_pretrained(f"openai/whisper-{model}")
+    whisper = WhisperForConditionalGeneration.from_pretrained(
+        f"openai/whisper-{model}", dtype=torch.float16).to(device).eval()
+
+    def features(pieces):
+        return processor(pieces, sampling_rate=SAMPLE_RATE, return_tensors="pt") \
+            .input_features.to(device, torch.float16)
+
+    texts: list[str] = []
+    with torch.inference_mode():
+        # Like whisperx: the language is read from the first 30 s of audio.
+        token = whisper.detect_language(features([audio[:30 * SAMPLE_RATE]]))[0]
+        language = processor.tokenizer.convert_ids_to_tokens(int(token)).strip("<|>")
+        for i in range(0, len(chunks), batch_size):
+            pieces = [audio[int(c["start"] * SAMPLE_RATE):int(c["end"] * SAMPLE_RATE)]
+                      for c in chunks[i:i + batch_size]]
+            # A static KV cache keeps tensor shapes fixed. With the default
+            # growing cache an Intel GPU compiles new kernels at every decoding
+            # step: minutes of warm-up. torch.compile would need a C compiler.
+            ids = whisper.generate(features(pieces), task="transcribe", language=language,
+                                   cache_implementation="static", disable_compile=True)
+            texts += processor.batch_decode(ids, skip_special_tokens=True)
+    return {"segments": segments_from_chunks(chunks, texts), "language": language}
+
+
+def transcribe(wav: Path, run: Run, model: str = "large-v3",
+               device: str | None = None, hf_token: str | None = None) -> dict:
+    import whisperx
+
+    device = resolve_device(device)
+    audio = whisperx.load_audio(str(wav))
+    # faster-whisper (CTranslate2) runs on CUDA or CPU only.
+    asr = _faster_whisper_asr if device in ("cuda", "cpu") else _transformers_asr
+    result = asr(audio, model, device)
     language = result["language"]
 
     # Nothing was said (gameplay without commentary): there is nothing to

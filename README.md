@@ -15,7 +15,10 @@ Design: `docs/superpowers/specs/2026-09-22-laya-claude-clipper-design.md`
   13 minutes on an Intel Arc 140T, 78 minutes on CPU.
 - Intel Arc users: install a torch build with XPU support. Laya's own device
   detection cannot see Arc, so set `CLIPPER_LAYA_DEVICE=xpu` or rely on
-  clipper's `auto`, which probes for it.
+  clipper's `auto`, which probes for it. Transcription follows the same
+  device: on Arc, Whisper runs through transformers (faster-whisper is
+  CUDA/CPU only), and the first run downloads `openai/whisper-<model>`
+  (about 3 GB for large-v3).
 
 ## Setup
 

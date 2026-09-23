@@ -250,3 +250,17 @@ def test_auto_on_a_silent_video_picks_stream_without_loading_laya(run):
     status = _go(JobRunner(stages), run, profile="auto")
     assert "load_agent" not in [n for n, _ in log]
     assert status["profile"] == "stream" and status["fallback"] is True
+
+
+def test_transcription_uses_the_device_picked_on_the_page(run, monkeypatch):
+    """The page's device reached Laya only; Whisper ran on CPU regardless."""
+    import clipper.transcribe
+    from clipper.web.jobs import default_stages
+
+    calls = []
+    monkeypatch.setattr(clipper.transcribe, "transcribe",
+                        lambda wav, r, model, device=None, hf_token=None:
+                        calls.append((model, device)))
+    default_stages().transcribe(run, {"model": "large-v3", "device": "xpu",
+                                      "diarize": False})
+    assert calls == [("large-v3", "xpu")]

@@ -20,7 +20,9 @@ from clipper.window import write_windows
 
 RUNS_DIR = Path("runs")
 
-DEVICE_HELP = ("Device for Laya. Default: CLIPPER_LAYA_DEVICE, else auto "
+WHISPER_DEVICE_HELP = ("Device for Whisper. Default: CLIPPER_LAYA_DEVICE, else auto "
+                       "(cuda -> xpu -> mps -> cpu).")
+DEVICE_HELP = ("Device for Laya and Whisper. Default: CLIPPER_LAYA_DEVICE, else auto "
                "(cuda -> xpu -> mps -> cpu). Intel Arc needs xpu; Laya's own "
                "auto-detect cannot see it.")
 
@@ -47,6 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ingest"); p.add_argument("video"); p.add_argument("--run")
     p = sub.add_parser("transcribe"); p.add_argument("run")
     p.add_argument("--model", default="large-v3"); p.add_argument("--no-diarize", action="store_true")
+    p.add_argument("--device", default=None, choices=DEVICES, help=WHISPER_DEVICE_HELP)
     p = sub.add_parser("window"); p.add_argument("run")
     p = sub.add_parser("action"); p.add_argument("run")
     p = sub.add_parser("score"); p.add_argument("run")
@@ -67,14 +70,14 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _ingest_and_transcribe(video: Path, name: str | None, model: str,
-                           diarize: bool = True) -> Run:
+                           diarize: bool = True, device: str | None = None) -> Run:
     tools = preflight(require_subtitles=False)
     run = Run.create(RUNS_DIR, name or default_run_name(video))
     check_same_source(run, video)
     if not run.exists("source.json"):
         ingest(tools.ffmpeg, tools.ffprobe, video, run)
     if not run.exists("transcript.json"):
-        transcribe(run.path("audio.wav"), run, model=model,
+        transcribe(run.path("audio.wav"), run, model=model, device=device,
                    hf_token=os.environ.get("HF_TOKEN") if diarize else None)
     return run
 
@@ -144,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "transcribe":
             run = Run.open(Path(args.run))
             transcript = transcribe(
-                run.path("audio.wav"), run, model=args.model,
+                run.path("audio.wav"), run, model=args.model, device=args.device,
                 hf_token=None if args.no_diarize else os.environ.get("HF_TOKEN"))
             print(f"{len(transcript['segments'])} segments, "
                   f"diarized={transcript['diarized']}")
@@ -186,7 +189,8 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "all":
             video = Path(args.video)
-            run = _ingest_and_transcribe(video, args.run, args.model)
+            run = _ingest_and_transcribe(video, args.run, args.model,
+                                         device=args.device)
             if not run.exists("windows.json"):
                 write_windows(run)
             _report_action(run_action(run, progress=_print_motion))

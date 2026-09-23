@@ -51,7 +51,8 @@ def default_stages() -> Stages:
 
     def transcribe_stage(run: Run, settings: dict) -> None:
         token = os.environ.get("HF_TOKEN") if settings["diarize"] else None
-        transcribe(run.path("audio.wav"), run, model=settings["model"], hf_token=token)
+        transcribe(run.path("audio.wav"), run, model=settings["model"],
+                   device=settings["device"], hf_token=token)
 
     def load_stage(run: Run, settings: dict) -> tuple:
         language = run.read_json("transcript.json").get("language")

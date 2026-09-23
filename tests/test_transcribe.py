@@ -197,3 +197,68 @@ def test_a_language_without_an_aligner_keeps_its_words_with_estimated_timings(
     assert out["language"] == "cy"
     assert [w["word"] for w in words] == ["un", "dau", "tri", "pedwar"]
     assert words[0]["start"] == 10.0 and words[-1]["end"] == 14.0
+
+
+def _stub_whisperx(monkeypatch):
+    """A stand-in for whisperx: audio loads, and no aligner exists."""
+    import sys
+    import types
+    fake = types.SimpleNamespace(
+        load_audio=lambda path: [0.0] * 16000,
+        load_align_model=lambda **kw: (_ for _ in ()).throw(ValueError("no aligner")),
+    )
+    monkeypatch.setitem(sys.modules, "whisperx", fake)
+
+
+@pytest.mark.parametrize("device, backend", [
+    ("cuda", "faster-whisper"), ("cpu", "faster-whisper"),
+    ("xpu", "transformers"), ("mps", "transformers")])
+def test_speech_recognition_runs_on_the_chosen_device(tmp_path, monkeypatch, device, backend):
+    """faster-whisper (CTranslate2) only runs on CUDA or CPU; an Intel Arc GPU
+    needs the transformers Whisper, or transcription silently falls to CPU."""
+    import clipper.transcribe as t
+    from clipper.run import Run
+    _stub_whisperx(monkeypatch)
+    calls = []
+
+    def fake(name):
+        def asr(audio, model, dev):
+            calls.append((name, model, dev))
+            return {"segments": [{"start": 0.0, "end": 1.0, "text": " hi"}], "language": "en"}
+        return asr
+
+    monkeypatch.setattr(t, "_faster_whisper_asr", fake("faster-whisper"))
+    monkeypatch.setattr(t, "_transformers_asr", fake("transformers"))
+    monkeypatch.setattr(t, "resolve_device", lambda requested=None: requested)
+    run = Run.create(tmp_path, "r")
+    out = t.transcribe(tmp_path / "a.wav", run, model="small", device=device)
+    assert calls == [(backend, "small", device)]
+    assert out["segments"][0]["text"] == "hi"
+    assert run.exists("transcript.json")
+
+
+def test_no_device_given_means_auto(tmp_path, monkeypatch):
+    import clipper.transcribe as t
+    from clipper.run import Run
+    _stub_whisperx(monkeypatch)
+    seen = []
+    monkeypatch.setattr(t, "resolve_device", lambda requested=None: seen.append(requested) or "xpu")
+    monkeypatch.setattr(t, "_transformers_asr",
+                        lambda audio, model, dev: {"segments": [], "language": "en"})
+    t.transcribe(tmp_path / "a.wav", Run.create(tmp_path, "r"), model="small")
+    assert seen == [None]
+
+
+def test_voice_chunks_become_segments_in_order():
+    from clipper.transcribe import segments_from_chunks
+    chunks = [{"start": 0.5, "end": 12.0}, {"start": 14.0, "end": 40.0}]
+    assert segments_from_chunks(chunks, [" one", " two"]) == [
+        {"start": 0.5, "end": 12.0, "text": " one"},
+        {"start": 14.0, "end": 40.0, "text": " two"}]
+
+
+def test_chunks_where_whisper_heard_nothing_are_dropped():
+    from clipper.transcribe import segments_from_chunks
+    chunks = [{"start": 0.0, "end": 5.0}, {"start": 6.0, "end": 9.0}]
+    assert segments_from_chunks(chunks, ["  ", " yes"]) == [
+        {"start": 6.0, "end": 9.0, "text": " yes"}]
