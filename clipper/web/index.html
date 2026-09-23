@@ -383,7 +383,7 @@ function showResults(run, made) {
     card.className = "result";
     const base = "/media/" + encodeURIComponent(run) + "/clips/" + encodeURIComponent(clip.folder) + "/";
     const video = document.createElement("video");
-    video.controls = true; video.preload = "metadata"; video.src = base + "final.mp4";
+    video.controls = true; video.preload = "metadata"; video.src = base + "final.mp4#t=0.1";
     const title = document.createElement("p");
     title.textContent = clip.title + " (" + clip.duration + " s)";
     const links = document.createElement("p");
