@@ -122,6 +122,13 @@ def _transformers_asr(audio, model: str, device: str, batch_size: int = 8) -> di
     return {"segments": segments_from_chunks(chunks, texts), "language": language}
 
 
+def uses_faster_whisper(device: str, rocm: bool) -> bool:
+    """faster-whisper (CTranslate2) runs on NVIDIA CUDA and the CPU only.
+    An AMD ROCm build of torch also calls its GPU `cuda`, but CTranslate2
+    cannot use it, so those runs go through transformers like Intel and Apple."""
+    return device == "cpu" or (device == "cuda" and not rocm)
+
+
 def _free_device_memory(device: str) -> None:
     """Hand cached GPU memory back to the driver. On an integrated GPU (Intel
     Arc) that memory is system RAM, and Laya needs it for scoring next.
@@ -157,8 +164,10 @@ def _transcribe(wav: Path, run: Run, model: str, device: str,
     import whisperx
 
     audio = whisperx.load_audio(str(wav))
-    # faster-whisper (CTranslate2) runs on CUDA or CPU only.
-    asr = _faster_whisper_asr if device in ("cuda", "cpu") else _transformers_asr
+    from clipper.hardware import is_rocm
+
+    fast = uses_faster_whisper(device, is_rocm() if device == "cuda" else False)
+    asr = _faster_whisper_asr if fast else _transformers_asr
     result = asr(audio, model, device)
     language = result["language"]
 
