@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from datetime import date
 from pathlib import Path
 
 PRODUCED_BY = {
@@ -67,3 +69,8 @@ class Run:
         target = self.root / "clips"
         target.mkdir(exist_ok=True)
         return target
+
+
+def default_run_name(video: Path) -> str:
+    stem = re.sub(r"[^a-z0-9]+", "-", video.stem.lower()).strip("-") or "run"
+    return f"{date.today().isoformat()}-{stem}"

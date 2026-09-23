@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
-from datetime import date
 from pathlib import Path
 
 from clipper.agent import AgentError
@@ -14,7 +12,7 @@ from clipper.plan import check_plan
 from clipper.preflight import PreflightError, preflight
 from clipper.profiles.loader import ProfileError
 from clipper.render import run_render
-from clipper.run import MissingArtifact, Run
+from clipper.run import MissingArtifact, Run, default_run_name
 from clipper.stages.score import run_score
 from clipper.transcribe import transcribe
 from clipper.window import write_windows
@@ -24,11 +22,6 @@ RUNS_DIR = Path("runs")
 DEVICE_HELP = ("Device for Laya. Default: CLIPPER_LAYA_DEVICE, else auto "
                "(cuda -> xpu -> mps -> cpu). Intel Arc needs xpu; Laya's own "
                "auto-detect cannot see it.")
-
-
-def default_run_name(video: Path) -> str:
-    stem = re.sub(r"[^a-z0-9]+", "-", video.stem.lower()).strip("-") or "run"
-    return f"{date.today().isoformat()}-{stem}"
 
 
 def _load_dotenv() -> None:
