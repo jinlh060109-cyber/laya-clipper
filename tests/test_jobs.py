@@ -26,6 +26,7 @@ def recorder_stages(log, fail_at=None, gate=None, pick="stream"):
         ingest=step("ingest"),
         transcribe=step("transcribe"),
         windows=step("windows"),
+        action=step("action", {"silent_seconds": 90.0, "spans": 2, "candidates": 3}),
         load_agent=step("load_agent", AGENT),
         choose_profile=step("choose_profile", {"profile": pick, "votes": {pick: 3},
                                                "sampled": 3, "fallback": False}),
@@ -54,7 +55,7 @@ def test_idle_before_any_job():
 def test_stages_run_in_order_and_finish(run):
     log = []
     status = _go(JobRunner(recorder_stages(log)), run)
-    assert [name for name, _ in log] == ["ingest", "transcribe", "windows", "score"]
+    assert [name for name, _ in log] == ["ingest", "transcribe", "windows", "action", "score"]
     assert status["state"] == "done"
     assert list(status["stages"]) == list(STAGES)
     assert all(v == "done" for v in status["stages"].values())
@@ -74,7 +75,7 @@ def test_an_explicit_profile_leaves_agent_loading_to_the_score_stage(run):
 def test_auto_loads_one_agent_and_reuses_it_for_scoring(run):
     log = []
     status = _go(JobRunner(recorder_stages(log)), run, profile="auto")
-    assert [name for name, _ in log] == ["ingest", "transcribe", "windows",
+    assert [name for name, _ in log] == ["ingest", "transcribe", "windows", "action",
                                          "load_agent", "choose_profile", "score"]
     _, profile, _, agent, _ = dict(log)["score"]
     assert profile == "stream"
@@ -217,3 +218,35 @@ def test_status_reports_scoring_progress(run):
     gate.set()
     runner.wait(5)
     assert runner.status()["state"] == "done"
+
+
+def test_action_runs_after_windows_and_its_result_is_reported(run):
+    log = []
+    status = _go(JobRunner(recorder_stages(log)), run)
+    assert [n for n, _ in log].index("action") == 3
+    assert status["result"]["action_candidates"] == 3
+    assert status["result"]["silent_seconds"] == 90.0
+
+
+def test_action_progress_is_visible_while_it_runs(run):
+    seen = {}
+    stages = recorder_stages([])
+
+    def action(r, progress):
+        progress(40, 100)
+        seen["status"] = runner.status()
+        return {"silent_seconds": 1.0, "spans": 1, "candidates": 1}
+
+    stages.action = action
+    runner = JobRunner(stages)
+    _go(runner, run)
+    assert seen["status"]["progress"] == {"stage": "action", "done": 40, "total": 100}
+
+
+def test_auto_on_a_silent_video_picks_stream_without_loading_laya(run):
+    log = []
+    stages = recorder_stages(log)
+    stages.windows = lambda r: []
+    status = _go(JobRunner(stages), run, profile="auto")
+    assert "load_agent" not in [n for n, _ in log]
+    assert status["profile"] == "stream" and status["fallback"] is True

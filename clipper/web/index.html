@@ -103,7 +103,8 @@
 <script>
 const STAGES = [
   ["upload", "Upload"], ["ingest", "Read video"], ["transcribe", "Transcribe"],
-  ["windows", "Split into windows"], ["profile", "Pick video type"], ["score", "Score with Laya"],
+  ["windows", "Split into windows"], ["action", "Find action without speech"],
+  ["profile", "Pick video type"], ["score", "Score with Laya"],
 ];
 const $ = (id) => document.getElementById(id);
 let file = null;
@@ -199,6 +200,8 @@ function render(status) {
   if (status.state === "idle") return;
   if ($("stages").children.length === 0) buildStages();
   for (const [id] of STAGES) setStage(id, status.stages[id]);
+  const p = status.progress;
+  if (p && status.stages[p.stage] === "running") setStage(p.stage, "running", p.done + "/" + p.total);
   if (status.state === "failed") {
     const label = (STAGES.find(([id]) => id === status.failed_stage) || [, "A stage"])[1];
     showError(label + " failed: " + status.error);
@@ -215,10 +218,16 @@ function summarize(status) {
   if (status.votes) {
     const votes = Object.entries(status.votes).filter(([, n]) => n > 0).map(([k, n]) => k + " " + n).join(", ");
     profile += status.fallback ? " (Laya could not tell, so it fell back to this)" : " (Laya's votes: " + votes + ")";
+  } else if (status.fallback) {
+    profile += " (nobody speaks, so gameplay was assumed)";
   }
   line(profile);
   const r = status.result || {};
-  line(r.candidates + " candidates, " + r.uncertain + " uncertain, " + r.failed + " failed windows, scored on " + r.device + ".");
+  if (r.device === "none") line("Nobody speaks in this video, so Laya had nothing to score.");
+  else line(r.candidates + " candidates, " + r.uncertain + " uncertain, " + r.failed + " failed windows, scored on " + r.device + ".");
+  if (r.action_candidates !== undefined) {
+    line(r.action_candidates + " action moments from " + (r.silent_seconds / 60).toFixed(1) + " min without speech.");
+  }
   const folder = line("Run folder: ");
   const code = document.createElement("code"); code.textContent = status.run_dir; folder.appendChild(code);
   line("Next: ask Claude to plan this run.");

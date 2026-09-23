@@ -9,7 +9,8 @@ from typing import Any, Callable
 
 from clipper.run import Run
 
-STAGES: tuple[str, ...] = ("upload", "ingest", "transcribe", "windows", "profile", "score")
+STAGES: tuple[str, ...] = ("upload", "ingest", "transcribe", "windows", "action",
+                           "profile", "score")
 
 
 class JobBusy(RuntimeError):
@@ -26,6 +27,7 @@ class Stages:
     ingest: Callable[[Run, Path], Any]
     transcribe: Callable[[Run, dict], Any]
     windows: Callable[[Run], Any]
+    action: Callable[[Run, Callable[[int, int], None]], dict]
     load_agent: Callable[[Run, dict], tuple]
     choose_profile: Callable[[Run, Any], dict]
     score: Callable[[Run, str, dict, "tuple | None", Callable[[int, int], None]], dict]
@@ -38,6 +40,7 @@ def default_stages() -> Stages:
     from clipper.ingest import ingest
     from clipper.preflight import preflight
     from clipper.profiles.loader import load_profile
+    from clipper.stages.action import run_action
     from clipper.stages.score import run_score
     from clipper.transcribe import transcribe
     from clipper.window import write_windows
@@ -61,8 +64,9 @@ def default_stages() -> Stages:
         return run_score(run, profile, device=settings["device"], agent=agent,
                          progress=progress)
 
-    return Stages(ingest_stage, transcribe_stage, write_windows,
-                  load_stage, choose_stage, score_stage)
+    return Stages(ingest=ingest_stage, transcribe=transcribe_stage, windows=write_windows,
+                  action=run_action, load_agent=load_stage,
+                  choose_profile=choose_stage, score=score_stage)
 
 
 @dataclass
@@ -210,13 +214,26 @@ class JobRunner:
 
             self._step(job, "ingest", lambda: stages.ingest(run, job.video))
             self._step(job, "transcribe", lambda: stages.transcribe(run, settings))
-            self._step(job, "windows", lambda: stages.windows(run))
+            def reporter(stage: str) -> Callable[[int, int], None]:
+                def report(done: int, total: int) -> None:
+                    # In memory only: status() is polled every second, and
+                    # writing job.json on every update would cost more than it.
+                    with self._lock:
+                        job.progress = {"stage": stage, "done": done, "total": total}
+                return report
+
+            windows = self._step(job, "windows", lambda: stages.windows(run))
+            found = self._step(job, "action", lambda: stages.action(run, reporter("action")))
 
             def pick() -> dict:
                 nonlocal agent
                 if settings["profile"] != "auto":
                     return {"profile": settings["profile"], "votes": None,
                             "fallback": False}
+                if windows is not None and len(windows) == 0:
+                    # Nothing was said, so Laya has nothing to vote on; gameplay
+                    # is the kind of video that stays silent throughout.
+                    return {"profile": "stream", "votes": None, "fallback": True}
                 agent = stages.load_agent(run, settings)
                 return stages.choose_profile(run, agent[0])
 
@@ -229,15 +246,12 @@ class JobRunner:
                 recorded["profile_fallback"] = bool(picked.get("fallback"))
             run.write_json("settings.json", recorded)
 
-            def report(done: int, total: int) -> None:
-                # In memory only: status() is polled every second, and writing
-                # job.json once per window would cost more than the update.
-                with self._lock:
-                    job.progress = {"stage": "score", "done": done, "total": total}
-
             result = self._step(job, "score",
                                 lambda: stages.score(run, picked["profile"], settings,
-                                                     agent, report))
+                                                     agent, reporter("score")))
+            if isinstance(found, dict) and isinstance(result, dict):
+                result = {**result, "action_candidates": found.get("candidates", 0),
+                          "silent_seconds": found.get("silent_seconds", 0.0)}
             # Marking "done" is part of the same protected body: if this
             # persist fails too, the catch-all below still ends the job
             # rather than leaving it stuck "running".

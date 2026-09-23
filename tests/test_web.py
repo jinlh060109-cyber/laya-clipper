@@ -21,6 +21,7 @@ def gated_stages(gate):
             return value
         return fn
     return Stages(ingest=ok(), transcribe=ok(), windows=ok(),
+                  action=ok({"silent_seconds": 0.0, "spans": 0, "candidates": 0}),
                   load_agent=ok(("A", {})),
                   choose_profile=ok({"profile": "podcast", "votes": {"podcast": 1},
                                      "sampled": 1, "fallback": False}),
