@@ -79,3 +79,11 @@ def test_unknown_layout_is_rejected():
     from clipper.filters import build_filter_chain
     with pytest.raises(ValueError, match="layout"):
         build_filter_chain(1920, 1080, True, None, layout="zoom")
+
+
+def test_fit_layout_hands_the_encoder_plain_420_frames():
+    """Intel Quick Sync painted half the blurred background green when it got
+    the overlay's output format directly; converting first fixes it."""
+    from clipper.filters import build_filter_chain
+    chain = build_filter_chain(1920, 1080, True, None, layout="fit")
+    assert chain.endswith("format=yuv420p")

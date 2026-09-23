@@ -43,7 +43,7 @@ def fit_expression() -> str:
             f"[bg]scale={VERTICAL_W}:{VERTICAL_H}:force_original_aspect_ratio=increase,"
             f"crop={VERTICAL_W}:{VERTICAL_H},boxblur=20:2[bgb];"
             f"[fg]scale={VERTICAL_W}:-2[fgs];"
-            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2")
+            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,format=yuv420p")
 
 
 def build_filter_chain(width: int, height: int, vertical: bool,
