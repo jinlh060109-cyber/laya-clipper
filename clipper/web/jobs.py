@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import os
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from clipper.pipeline import ANALYZE, MAKE, Steps, default_steps
 from clipper.run import Run
 
-STAGES: tuple[str, ...] = ("upload", "ingest", "transcribe", "windows", "action",
-                           "profile", "score")
+KINDS = {"analyze": ("upload", *ANALYZE), "make": MAKE}
 
 
 class JobBusy(RuntimeError):
@@ -22,101 +21,46 @@ class _Stopped(Exception):
 
 
 @dataclass
-class Stages:
-    """The pipeline's stage functions, injected so tests never load real tools."""
-    ingest: Callable[[Run, Path], Any]
-    transcribe: Callable[[Run, dict], Any]
-    windows: Callable[[Run], Any]
-    action: Callable[[Run, Callable[[int, int], None]], dict]
-    load_agent: Callable[[Run, dict], tuple]
-    choose_profile: Callable[[Run, Any], dict]
-    score: Callable[[Run, str, dict, "tuple | None", Callable[[int, int], None]], dict]
-
-
-def default_stages() -> Stages:
-    """The real stages. Imports are local so importing this module stays cheap."""
-    from clipper.agent import load_agent
-    from clipper.classify import choose_profile
-    from clipper.ingest import ingest
-    from clipper.preflight import preflight
-    from clipper.profiles.loader import load_profile
-    from clipper.stages.action import run_action
-    from clipper.stages.score import run_score
-    from clipper.transcribe import transcribe
-    from clipper.window import write_windows
-
-    def ingest_stage(run: Run, video: Path) -> None:
-        tools = preflight(require_subtitles=False)
-        ingest(tools.ffmpeg, tools.ffprobe, video, run)
-
-    def transcribe_stage(run: Run, settings: dict) -> None:
-        token = os.environ.get("HF_TOKEN") if settings["diarize"] else None
-        transcribe(run.path("audio.wav"), run, model=settings["model"],
-                   device=settings["device"], hf_token=token)
-
-    def load_stage(run: Run, settings: dict) -> tuple:
-        language = run.read_json("transcript.json").get("language")
-        return load_agent(language, load_profile("core"), device=settings["device"])
-
-    def choose_stage(run: Run, agent) -> dict:
-        return choose_profile(run.read_json("windows.json")["windows"], agent)
-
-    def score_stage(run: Run, profile: str, settings: dict, agent, progress) -> dict:
-        return run_score(run, profile, device=settings["device"], agent=agent,
-                         progress=progress)
-
-    return Stages(ingest=ingest_stage, transcribe=transcribe_stage, windows=write_windows,
-                  action=run_action, load_agent=load_stage,
-                  choose_profile=choose_stage, score=score_stage)
-
-
-@dataclass
 class Job:
     run: Run
-    video: Path
+    kind: str
     settings: dict
-    stages: dict = field(default_factory=lambda: {
-        name: ("done" if name == "upload" else "pending") for name in STAGES})
+    video: Path | None = None
+    stages: dict = field(default_factory=dict)
     state: str = "running"
     error: str | None = None
     failed_stage: str | None = None
-    profile: str | None = None
-    votes: dict | None = None
-    fallback: bool = False
     result: dict | None = None
     progress: dict | None = None
     started: float = field(default_factory=time.time)
     finished: float | None = None
 
     def snapshot(self) -> dict:
-        return {"state": self.state, "run": self.run.root.name,
+        return {"state": self.state, "kind": self.kind, "run": self.run.root.name,
                 "run_dir": str(self.run.root), "stages": dict(self.stages),
                 "error": self.error, "failed_stage": self.failed_stage,
-                "profile": self.profile, "votes": self.votes,
-                "fallback": self.fallback, "result": self.result,
-                "progress": self.progress,
+                "result": self.result, "progress": self.progress,
                 "started": self.started, "finished": self.finished}
 
 
 class JobRunner:
-    """Runs one pipeline job at a time in a background thread."""
+    """Runs one job at a time (analyze or make clips) in a background thread."""
 
-    def __init__(self, stages: Stages | None = None) -> None:
-        self._stages = stages
+    def __init__(self, steps: Steps | None = None) -> None:
+        self._steps = steps
         self._lock = threading.Lock()
-        # A separate lock for the job.json write itself: `status()`/`busy()`
-        # only ever need `_lock` briefly, but two threads persisting the same
-        # run's job.json (a job finishing while the next one's `start()` does
-        # its initial write) must not race through the same `.tmp` file.
+        # A separate lock for the job.json write itself, so two threads
+        # persisting the same run (a job finishing while the next starts)
+        # never race through the same .tmp file.
         self._write_lock = threading.Lock()
         self._job: Job | None = None
         self._thread: threading.Thread | None = None
 
     @property
-    def stages(self) -> Stages:
-        if self._stages is None:
-            self._stages = default_stages()
-        return self._stages
+    def steps(self) -> Steps:
+        if self._steps is None:
+            self._steps = default_steps()
+        return self._steps
 
     def busy(self) -> bool:
         with self._lock:
@@ -130,21 +74,27 @@ class JobRunner:
         if self._thread is not None:
             self._thread.join(timeout)
 
-    def start(self, run: Run, video: Path, settings: dict) -> None:
+    def start(self, run: Run, kind: str, settings: dict, video: Path | None = None) -> None:
+        if kind not in KINDS:
+            raise ValueError(f"Unknown job kind {kind!r}.")
+        if kind == "make" and not run.exists("selection.json"):
+            raise ValueError("Analyze this video first; there is no clip selection yet.")
         with self._lock:
             if self._job is not None and self._job.state == "running":
                 raise JobBusy("A job is already running. Wait for it to finish.")
             previous = self._job
-            job = Job(run=run, video=video, settings=dict(settings))
+            stages = {name: "pending" for name in KINDS[kind]}
+            if kind == "analyze":
+                stages["upload"] = "done"
+            job = Job(run=run, kind=kind, settings=dict(settings), video=video, stages=stages)
             self._job = job
         try:
-            run.write_json("settings.json", job.settings)
+            if kind == "analyze":
+                run.write_json("settings.json", job.settings)
             self._persist(job)
         except Exception:
-            # The job never actually started: don't leave a phantom "running"
-            # job behind (every later start()/upload would then raise
-            # JobBusy forever). Restore whatever was there before and let the
-            # caller see the error.
+            # The job never started: restore what was there so later starts
+            # are not refused by a phantom "running" job.
             with self._lock:
                 if self._job is job:
                     self._job = previous
@@ -155,10 +105,6 @@ class JobRunner:
     # -- internals ---------------------------------------------------------
 
     def _persist(self, job: Job) -> None:
-        # Hold the write lock across the snapshot *and* the write so two
-        # concurrent persists (e.g. a job finishing while the next start()
-        # writes its own initial job.json) can't interleave through the same
-        # job.json.tmp file.
         with self._write_lock:
             with self._lock:
                 snapshot = job.snapshot()
@@ -166,23 +112,19 @@ class JobRunner:
 
     def _update(self, job: Job, **changes) -> None:
         with self._lock:
-            stage_changes = changes.pop("stage", None)
-            if stage_changes:
-                job.stages[stage_changes[0]] = stage_changes[1]
+            stage = changes.pop("stage", None)
+            if stage:
+                job.stages[stage[0]] = stage[1]
             for key, value in changes.items():
                 setattr(job, key, value)
-        # The in-memory job (read by status()/busy()) is the source of
-        # truth and has already been updated above; persisting it to disk
-        # is best-effort and must not crash the worker thread. A raised
-        # persist failure here still propagates to the caller (_step, or
-        # _execute's final "done" update), which is caught by _execute's
-        # catch-all and turned into a proper "failed" job via _fail.
+        # The in-memory job is the source of truth; a failed persist here
+        # propagates to _execute's catch-all, which ends the job as failed.
         self._persist(job)
 
     def _fail(self, job: Job, exc: Exception) -> None:
         """Best-effort terminal failure marker: this must never itself raise."""
         with self._lock:
-            running = next((s for s, state in job.stages.items() if state == "running"), None)
+            running = next((s for s, st in job.stages.items() if st == "running"), None)
             job.state = "failed"
             job.error = str(exc) or type(exc).__name__
             if job.failed_stage is None:
@@ -205,59 +147,52 @@ class JobRunner:
         self._update(job, stage=(name, "done"))
         return value
 
+    def _reporter(self, job: Job, stage: str) -> Callable[[int, int], None]:
+        def report(done: int, total: int) -> None:
+            # In memory only: status() is polled every second.
+            with self._lock:
+                job.progress = {"stage": stage, "done": done, "total": total}
+        return report
+
     def _execute(self, job: Job) -> None:
-        run, settings = job.run, job.settings
-        agent = None
         try:
-            # Building the real stages (importing torch etc.) can itself
-            # fail, so it must be inside this try -- see the catch-all below.
-            stages = self.stages
-
-            self._step(job, "ingest", lambda: stages.ingest(run, job.video))
-            self._step(job, "transcribe", lambda: stages.transcribe(run, settings))
-            def reporter(stage: str) -> Callable[[int, int], None]:
-                def report(done: int, total: int) -> None:
-                    # In memory only: status() is polled every second, and
-                    # writing job.json on every update would cost more than it.
-                    with self._lock:
-                        job.progress = {"stage": stage, "done": done, "total": total}
-                return report
-
-            windows = self._step(job, "windows", lambda: stages.windows(run))
-            found = self._step(job, "action", lambda: stages.action(run, reporter("action")))
-
-            def pick() -> dict:
-                nonlocal agent
-                if settings["profile"] != "auto":
-                    return {"profile": settings["profile"], "votes": None,
-                            "fallback": False}
-                if windows is not None and len(windows) == 0:
-                    # Nothing was said, so Laya has nothing to vote on; gameplay
-                    # is the kind of video that stays silent throughout.
-                    return {"profile": "stream", "votes": None, "fallback": True}
-                agent = stages.load_agent(run, settings)
-                return stages.choose_profile(run, agent[0])
-
-            picked = self._step(job, "profile", pick)
-            self._update(job, profile=picked["profile"], votes=picked.get("votes"),
-                         fallback=bool(picked.get("fallback")))
-            recorded = {**settings, "profile_chosen": picked["profile"]}
-            if settings["profile"] == "auto":
-                recorded["profile_votes"] = picked.get("votes")
-                recorded["profile_fallback"] = bool(picked.get("fallback"))
-            run.write_json("settings.json", recorded)
-
-            result = self._step(job, "score",
-                                lambda: stages.score(run, picked["profile"], settings,
-                                                     agent, reporter("score")))
-            if isinstance(found, dict) and isinstance(result, dict):
-                result = {**result, "action_candidates": found.get("candidates", 0),
-                          "silent_seconds": found.get("silent_seconds", 0.0)}
-            # Marking "done" is part of the same protected body: if this
-            # persist fails too, the catch-all below still ends the job
-            # rather than leaving it stuck "running".
+            # Building the real steps (importing torch etc.) can itself fail,
+            # so it sits inside this try -- see the catch-all below.
+            steps = self.steps
+            run = job.run
+            if job.kind == "analyze":
+                result = self._analyze(job, steps, run)
+            else:
+                result = self._make(job, steps, run)
             self._update(job, state="done", result=result, finished=time.time())
         except _Stopped:
             return
-        except Exception as exc:  # noqa: BLE001 - any escape ends the job, never leaves it "running"
+        except Exception as exc:  # noqa: BLE001 - never leave a job "running"
             self._fail(job, exc)
+
+    def _analyze(self, job: Job, steps: Steps, run: Run) -> dict:
+        settings = job.settings
+        self._step(job, "ingest", lambda: steps.ingest(run, job.video))
+        self._step(job, "transcribe", lambda: steps.transcribe(run, settings))
+        segments = self._step(job, "segment", lambda: steps.segment(run, settings)) or {}
+        rated = self._step(job, "rate", lambda: steps.rate(
+            run, settings, self._reporter(job, "rate"))) or {}
+        found = self._step(job, "action", lambda: steps.action(
+            run, self._reporter(job, "action"))) or {}
+        chosen = self._step(job, "select", lambda: steps.select(run, settings)) or {}
+        return {"content_type": segments.get("content_type"), "ai": segments.get("ai"),
+                "ai_error": segments.get("ai_error"),
+                "candidates": len(segments.get("candidates") or []),
+                "scored": rated.get("scored", 0), "failed": rated.get("failed", 0),
+                "device": rated.get("device"),
+                "action_candidates": found.get("candidates", 0),
+                "silent_seconds": found.get("silent_seconds", 0.0),
+                "kept": sum(1 for c in chosen.get("clips") or [] if c.get("include"))}
+
+    def _make(self, job: Job, steps: Steps, run: Run) -> dict:
+        chosen = self._step(job, "style", lambda: steps.style(run, job.settings))
+        fills = self._step(job, "fillin", lambda: steps.fillin(
+            run, chosen, self._reporter(job, "fillin")))
+        done = self._step(job, "edit", lambda: steps.edit(
+            run, chosen, fills, self._reporter(job, "edit")))
+        return {"clips": done}

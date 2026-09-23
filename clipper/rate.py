@@ -99,6 +99,7 @@ def run_rate(run: Run, device: str | None = None, agent: tuple | None = None,
         rated.append({**candidate, **rating})
         if progress is not None:
             progress(len(rated), len(candidates))
+    del model, agent  # see hardware.free_device_memory
     run.write_json("scored.json", {"laya_model": meta, "candidates": rated})
     failed = sum(1 for r in rated if r["failed"])
     return {"scored": len(rated) - failed, "failed": failed, "device": meta.get("device")}

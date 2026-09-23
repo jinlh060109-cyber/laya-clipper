@@ -6,25 +6,22 @@ import sys
 from pathlib import Path
 
 from clipper.agent import AgentError
+from clipper.ai import AIError
 from clipper.device import VALID as DEVICES
+from clipper.hardware import ENCODERS, detect
 from clipper.ingest import check_same_source, ingest
-from clipper.plan import check_plan
+from clipper.pipeline import default_steps
 from clipper.preflight import PreflightError, preflight
-from clipper.profiles.loader import ProfileError
-from clipper.render import run_render
 from clipper.run import MissingArtifact, Run, default_run_name
+from clipper.selection import apply_choices
 from clipper.stages.action import run_action
-from clipper.stages.score import run_score
+from clipper.style import CHOICES
 from clipper.transcribe import transcribe
-from clipper.window import write_windows
 
 RUNS_DIR = Path("runs")
-
-WHISPER_DEVICE_HELP = ("Device for Whisper. Default: CLIPPER_LAYA_DEVICE, else auto "
-                       "(cuda -> xpu -> mps -> cpu).")
-DEVICE_HELP = ("Device for Laya and Whisper. Default: CLIPPER_LAYA_DEVICE, else auto "
-               "(cuda -> xpu -> mps -> cpu). Intel Arc needs xpu; Laya's own "
-               "auto-detect cannot see it.")
+MODELS = ("large-v3", "medium", "small")
+DEVICE_HELP = ("Device for Whisper and Laya. Default: CLIPPER_LAYA_DEVICE, else auto "
+               "(cuda -> xpu -> mps -> cpu). `clipper hardware` shows what this machine has.")
 
 
 def _load_dotenv() -> None:
@@ -34,8 +31,7 @@ def _load_dotenv() -> None:
     for line in env.read_text(encoding="utf-8").splitlines():
         if line.strip() and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
-            # An empty value in .env means "unset", not "set to empty": an empty
-            # CLIPPER_LAYA_DEVICE would otherwise mask the auto default.
+            # An empty value in .env means "unset", not "set to empty".
             if value.strip():
                 os.environ.setdefault(key.strip(), value.strip())
 
@@ -44,42 +40,34 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="clipper")
     sub = parser.add_subparsers(dest="command")
 
-    # --profile is validated by load_profile, not argparse `choices`, so an
-    # unknown name exits 1 with the list of available profiles.
+    p = sub.add_parser("analyze", help="Steps 1-6: from a video to a clip selection.")
+    p.add_argument("video"); p.add_argument("--run")
+    p.add_argument("--device", default=None, choices=DEVICES, help=DEVICE_HELP)
+    p.add_argument("--model", default="large-v3", choices=MODELS)
+    p.add_argument("--no-diarize", action="store_true")
+    p.add_argument("--prompt", default="", help="What you are looking for, e.g. 'useful tips'.")
+    p.add_argument("--top", type=int, default=5, help="How many clips to tick.")
+
+    p = sub.add_parser("make", help="Steps 7-10: style, optional AI fill-in, edit.")
+    p.add_argument("run")
+    p.add_argument("--only", help="Comma-separated clip ids to make, e.g. c1,c3,a0.")
+    p.add_argument("--fill-in", action="store_true", help="Let the AI fill in each clip.")
+    for key in ("layout", "captions", "caption_case", "encoder"):
+        p.add_argument(f"--{key.replace('_', '-')}", dest=key, choices=CHOICES[key])
+
+    p = sub.add_parser("hardware", help="Show the GPUs and video encoders found.")
+
     p = sub.add_parser("ingest"); p.add_argument("video"); p.add_argument("--run")
     p = sub.add_parser("transcribe"); p.add_argument("run")
-    p.add_argument("--model", default="large-v3"); p.add_argument("--no-diarize", action="store_true")
-    p.add_argument("--device", default=None, choices=DEVICES, help=WHISPER_DEVICE_HELP)
-    p = sub.add_parser("window"); p.add_argument("run")
+    p.add_argument("--model", default="large-v3", choices=MODELS)
+    p.add_argument("--no-diarize", action="store_true")
+    p.add_argument("--device", default=None, choices=DEVICES, help=DEVICE_HELP)
     p = sub.add_parser("action"); p.add_argument("run")
-    p = sub.add_parser("score"); p.add_argument("run")
-    p.add_argument("--profile", required=True)
-    p.add_argument("--device", default=None, choices=DEVICES, help=DEVICE_HELP)
-    p = sub.add_parser("plan"); p.add_argument("run"); p.add_argument("--check", action="store_true")
-    p = sub.add_parser("render"); p.add_argument("run")
-    p.add_argument("--vertical", action="store_true")
-    p.add_argument("--captions", default="burn", choices=["burn", "sidecar", "none"])
-    p = sub.add_parser("all"); p.add_argument("video")
-    p.add_argument("--profile", required=True)
-    p.add_argument("--device", default=None, choices=DEVICES, help=DEVICE_HELP)
-    p.add_argument("--run"); p.add_argument("--model", default="large-v3")
+
     p = sub.add_parser("web")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true")
     return parser
-
-
-def _ingest_and_transcribe(video: Path, name: str | None, model: str,
-                           diarize: bool = True, device: str | None = None) -> Run:
-    tools = preflight(require_subtitles=False)
-    run = Run.create(RUNS_DIR, name or default_run_name(video))
-    check_same_source(run, video)
-    if not run.exists("source.json"):
-        ingest(tools.ffmpeg, tools.ffprobe, video, run)
-    if not run.exists("transcript.json"):
-        transcribe(run.path("audio.wav"), run, model=model, device=device,
-                   hf_token=os.environ.get("HF_TOKEN") if diarize else None)
-    return run
 
 
 def _printer(label: str):
@@ -91,10 +79,6 @@ def _printer(label: str):
     return show
 
 
-_print_progress = _printer("Scoring windows")
-_print_motion = _printer("Measuring motion (s)")
-
-
 def _report_action(result: dict) -> None:
     if not result["spans"]:
         print("No stretch of 8 s or more without speech; no action moments.")
@@ -103,9 +87,81 @@ def _report_action(result: dict) -> None:
               f"{result['silent_seconds'] / 60:.1f} min without speech")
 
 
-def _report_score(result: dict) -> None:
-    print(f"{result['candidates']} candidates, {result['uncertain']} uncertain, "
-          f"{result['failed']} failed windows (scored on {result['device']})")
+def _analyze(args) -> int:
+    video = Path(args.video)
+    run = Run.create(RUNS_DIR, args.run or default_run_name(video))
+    check_same_source(run, video)
+    steps = default_steps()
+    settings = {"device": args.device or "auto", "model": args.model,
+                "diarize": not args.no_diarize, "prompt": args.prompt, "top_n": args.top}
+    run.write_json("settings.json", settings)
+    if not run.exists("source.json"):
+        steps.ingest(run, video)
+    if not run.exists("transcript.json"):
+        steps.transcribe(run, settings)
+    segments = steps.segment(run, settings)
+    if segments.get("ai_error"):
+        print(f"The AI step failed, so clips were cut into chunks: {segments['ai_error']}",
+              file=sys.stderr)
+    rated = steps.rate(run, settings, _printer("Laya rating clips"))
+    _report_action(steps.action(run, _printer("Measuring motion (s)")))
+    chosen = steps.select(run, settings)
+
+    ai = segments.get("ai")
+    how = f"by {ai['provider']} ({ai['model']})" if ai else "without AI"
+    print(f"{len(segments.get('candidates') or [])} clips proposed {how}; "
+          f"{rated.get('scored', 0)} rated by Laya on {rated.get('device')}.")
+    for clip in chosen.get("clips") or []:
+        mark = "[x]" if clip.get("include") else "[ ]"
+        print(f"  {mark} {clip['id']:>4}  {clip['start']:7.1f}-{clip['end']:7.1f}s  "
+              f"score {clip.get('score', 0):.2f}  {clip.get('category', '')}: "
+              f"{clip.get('title_hint', '')}")
+    print(f"Artifacts in {run.root}.\nNext: clipper make {run.root} "
+          f"[--only c1,c3] [--fill-in]")
+    return 0
+
+
+def _make(args) -> int:
+    run = Run.open(Path(args.run))
+    selection = run.read_json("selection.json")
+    if args.only or args.fill_in:
+        wanted = [cid.strip() for cid in args.only.split(",")] if args.only else None
+        choices = [{"id": clip["id"],
+                    "include": clip["id"] in wanted if wanted is not None else clip["include"],
+                    "fill_in": bool(args.fill_in)}
+                   for clip in selection["clips"]]
+        if wanted is not None:
+            known = {clip["id"] for clip in selection["clips"]}
+            unknown = [cid for cid in wanted if cid not in known]
+            if unknown:
+                raise ValueError(f"Unknown clip id(s): {', '.join(unknown)}.")
+        apply_choices(run, choices)
+    overrides = {key: getattr(args, key) for key in ("layout", "captions",
+                                                     "caption_case", "encoder")
+                 if getattr(args, key)}
+    steps = default_steps()
+    chosen = steps.style(run, {"style": overrides})
+    fills = steps.fillin(run, chosen, _printer("AI filling in clips"))
+    for clip in steps.edit(run, chosen, fills, _printer("Editing clips")):
+        print(f"{run.root / clip['final']}  {clip['duration']}s  {clip['title']}")
+    print("Each clip folder also has prompt.md and edit.json for an AI editor.")
+    return 0
+
+
+def _hardware() -> int:
+    info = detect()
+    print("Devices for Whisper and Laya:")
+    for device in info["devices"]:
+        mark = "yes" if device["available"] else "no "
+        print(f"  [{mark}] {device['id']:<5} {device['label']}: {device['detail']}")
+        if device.get("hint"):
+            print(f"          {device['hint']}")
+    print("Video encoders:")
+    for encoder in info["encoders"]:
+        mark = "yes" if encoder["available"] else "no "
+        print(f"  [{mark}] {encoder['id']:<12} {encoder['label']}"
+              + (f": {encoder['detail']}" if encoder.get("detail") else ""))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -135,6 +191,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        if args.command == "analyze":
+            return _analyze(args)
+        if args.command == "make":
+            return _make(args)
+        if args.command == "hardware":
+            return _hardware()
         if args.command == "ingest":
             tools = preflight(require_subtitles=False)
             video = Path(args.video)
@@ -143,7 +205,6 @@ def main(argv: list[str] | None = None) -> int:
             source = ingest(tools.ffmpeg, tools.ffprobe, video, run)
             print(f"{run.root}: {source['duration']:.1f}s, "
                   f"{source['video']['width']}x{source['video']['height']}")
-
         elif args.command == "transcribe":
             run = Run.open(Path(args.run))
             transcript = transcribe(
@@ -151,56 +212,10 @@ def main(argv: list[str] | None = None) -> int:
                 hf_token=None if args.no_diarize else os.environ.get("HF_TOKEN"))
             print(f"{len(transcript['segments'])} segments, "
                   f"diarized={transcript['diarized']}")
-
-        elif args.command == "window":
-            run = Run.open(Path(args.run))
-            print(f"{len(write_windows(run))} windows")
-
         elif args.command == "action":
             run = Run.open(Path(args.run))
-            _report_action(run_action(run, progress=_print_motion))
-
-        elif args.command == "score":
-            run = Run.open(Path(args.run))
-            _report_score(run_score(run, args.profile, device=args.device,
-                                    progress=_print_progress))
-
-        elif args.command == "plan":
-            run = Run.open(Path(args.run))
-            if not args.check:
-                print("The plan stage is performed by Claude. "
-                      "See .claude/skills/clipper/SKILL.md, then re-run with --check.")
-                return 0
-            errors, warnings = check_plan(run)
-            for error in errors:
-                print(f"error: {error}")
-            for warning in warnings:
-                print(f"warning: {warning}")
-            if errors:
-                return 1
-            print("plan.json looks good." if not warnings
-                  else "plan.json will render; review the warnings above.")
-
-        elif args.command == "render":
-            run = Run.open(Path(args.run))
-            written = run_render(run, vertical=args.vertical, captions=args.captions)
-            for clip in written:
-                print(f"{clip['file']}  {clip['duration']}s  {clip.get('title', '')}")
-
-        elif args.command == "all":
-            video = Path(args.video)
-            run = _ingest_and_transcribe(video, args.run, args.model,
-                                         device=args.device)
-            if not run.exists("windows.json"):
-                write_windows(run)
-            _report_action(run_action(run, progress=_print_motion))
-            _report_score(run_score(run, args.profile, device=args.device,
-                                    progress=_print_progress))
-            print(f"Artifacts in {run.root}.")
-            print("Next: ask Claude to run the plan stage "
-                  "(.claude/skills/clipper/SKILL.md), then `clipper render`.")
-
-    except (ProfileError, MissingArtifact, PreflightError, AgentError,
+            _report_action(run_action(run, progress=_printer("Measuring motion (s)")))
+    except (MissingArtifact, PreflightError, AgentError, AIError,
             ValueError, RuntimeError) as error:
         print(str(error), file=sys.stderr)
         return 1

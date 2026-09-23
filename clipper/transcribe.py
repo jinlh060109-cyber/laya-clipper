@@ -130,23 +130,12 @@ def uses_faster_whisper(device: str, rocm: bool) -> bool:
 
 
 def _free_device_memory(device: str) -> None:
-    """Hand cached GPU memory back to the driver. On an integrated GPU (Intel
-    Arc) that memory is system RAM, and Laya needs it for scoring next.
+    """See hardware.free_device_memory. The stages below `del` their models
+    explicitly: a library that catches a failed import (torchcodec, here)
+    keeps its traceback, and with it every frame below, locals included."""
+    from clipper.hardware import free_device_memory
 
-    Only unreferenced models can be freed, and returning is not enough: a
-    library that catches a failed import (torchcodec, here) keeps its
-    traceback, and with it every frame below, locals included. So the stages
-    `del` their models explicitly."""
-    if device == "cpu":
-        return
-    import gc
-
-    import torch
-
-    gc.collect()
-    backend = getattr(torch, device, None)
-    if backend is not None and hasattr(backend, "empty_cache"):
-        backend.empty_cache()
+    free_device_memory(device)
 
 
 def transcribe(wav: Path, run: Run, model: str = "large-v3",

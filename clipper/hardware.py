@@ -83,6 +83,22 @@ def probe_encoders(ffmpeg: str) -> list[str]:
     return working
 
 
+def free_device_memory(device: str) -> None:
+    """Hand cached GPU memory back to the driver. On an integrated GPU (Intel
+    Arc) that memory is system RAM, and the next model needs it. Only models
+    nothing refers to any more can be freed."""
+    if device == "cpu":
+        return
+    import gc
+
+    import torch
+
+    gc.collect()
+    backend = getattr(torch, device, None)
+    if backend is not None and hasattr(backend, "empty_cache"):
+        backend.empty_cache()
+
+
 def is_rocm() -> bool:
     """True when torch is an AMD ROCm build (it then reports devices as `cuda`)."""
     try:
