@@ -4,7 +4,6 @@ import os
 import warnings
 
 from clipper.device import resolve_device
-from clipper.profiles.loader import Profile
 
 LAYA_REPO_DEFAULT = "convaiinnovations/laya"
 
@@ -32,10 +31,15 @@ def _bucket(qtype: str, k: int) -> str:
     return f"{qtype}:{size}"
 
 
-def used_buckets(profile: Profile) -> set[str]:
-    """The temperature buckets this profile's questions actually reach."""
+def _questions(questions) -> dict:
+    """A question dict; a legacy Profile is read through its `questions`."""
+    return getattr(questions, "questions", questions)
+
+
+def used_buckets(questions) -> set[str]:
+    """The temperature buckets these questions actually reach."""
     out: set[str] = set()
-    for q in profile.questions.values():
+    for q in _questions(questions).values():
         qtype = q.get("type")
         crit = q.get("criteria")
         if qtype == "score":
@@ -48,7 +52,7 @@ def used_buckets(profile: Profile) -> set[str]:
     return out
 
 
-def uncalibrated_buckets(agent, profile: Profile) -> list[str]:
+def uncalibrated_buckets(agent, questions) -> list[str]:
     """Buckets this profile reaches whose shipped temperature was out of range.
 
     Evaluated against the buckets actually used, not against whether Laya warned
@@ -56,7 +60,7 @@ def uncalibrated_buckets(agent, profile: Profile) -> list[str]:
     so a flag keyed on the warning would be permanently and uselessly false.
     """
     raw = getattr(agent, "temperature_by_options_raw", {}) or {}
-    reachable = used_buckets(profile)
+    reachable = used_buckets(questions)
     bad = []
     for bucket, temp in raw.items():
         if bucket not in reachable:
@@ -79,7 +83,7 @@ def _package_version() -> str:
         return "unknown"
 
 
-def load_agent(language: str | None, profile: Profile, device: str | None = None,
+def load_agent(language: str | None, questions, device: str | None = None,
                repo: str | None = None, loader=None) -> tuple[object, dict]:
     """Load one Laya agent for a run and assemble its provenance.
 
@@ -122,7 +126,7 @@ def load_agent(language: str | None, profile: Profile, device: str | None = None
             stacklevel=2,
         )
 
-    bad = uncalibrated_buckets(agent, profile)
+    bad = uncalibrated_buckets(agent, questions)
     meta = {
         "package": _package_version(),
         "repo": repo,
