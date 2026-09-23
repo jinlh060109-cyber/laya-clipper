@@ -112,3 +112,26 @@ def test_clip_format_keeps_the_raw_choice_value():
     windows = [_window(0, 0.0)]
     out = merge_candidates(windows, [_ranked(0, 0.8, fmt="story")], PROFILE)
     assert out["candidates"][0]["clip_format"] == "story"
+
+
+def test_low_confidence_windows_below_threshold_are_routed_not_dropped():
+    """A composite Laya is unsure of cannot reject a window either; Claude decides."""
+    windows = [_window(0, 0.0), _window(1, 40.0)]
+    ranked = [_ranked(0, 0.2, uncertain=True), _ranked(1, 0.2)]
+    out = merge_candidates(windows, ranked, PROFILE)
+    assert out["candidates"] == []
+    assert [c["window_ids"] for c in out["uncertain"]] == [[0]]
+
+
+def test_gated_uncertain_windows_stay_excluded():
+    windows = [_window(0, 0.0)]
+    ranked = [_ranked(0, 0.2, gated=False, uncertain=True)]
+    assert merge_candidates(windows, ranked, PROFILE)["uncertain"] == []
+
+
+def test_uncertain_bucket_is_sorted_by_peak_descending():
+    windows = [_window(0, 0.0), _window(1, 100.0)]
+    ranked = [_ranked(0, 0.2, uncertain=True), _ranked(1, 0.4, uncertain=True)]
+    out = merge_candidates(windows, ranked, PROFILE)
+    assert [c["window_ids"] for c in out["uncertain"]] == [[1], [0]]
+    assert [c["id"] for c in out["uncertain"]] == [0, 1]

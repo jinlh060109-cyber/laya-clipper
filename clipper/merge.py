@@ -79,16 +79,26 @@ def merge_candidates(windows: list[dict], ranked: list[dict], profile: Profile) 
 
     hot, unsure = [], []
     for wid, record in sorted(ranked_by_id.items()):
-        if not record.get("gated") or record["composite"] < threshold:
+        if not record.get("gated"):
             continue
-        (unsure if record.get("uncertain") else hot).append(wid)
+        # An uncertain composite cannot reject a window any more than it can
+        # promote one, so uncertain windows skip the threshold and go to
+        # Claude. Dropping them would silently lose exactly the windows Laya
+        # said it could not judge.
+        if record.get("uncertain"):
+            unsure.append(wid)
+        elif record["composite"] >= threshold:
+            hot.append(wid)
 
-    candidates = [_build(run, by_id, ranked_by_id, profile, i)
-                  for i, run in enumerate(_group(hot, by_id))]
-    candidates.sort(key=lambda c: c["peak_composite"], reverse=True)
-    for i, candidate in enumerate(candidates):
+    return {"candidates": _built(hot, by_id, ranked_by_id, profile),
+            "uncertain": _built(unsure, by_id, ranked_by_id, profile)}
+
+
+def _built(ids: list[int], by_id: dict, ranked_by_id: dict, profile: Profile) -> list[dict]:
+    """Group, build, sort by peak descending, then number in that order."""
+    built = [_build(run, by_id, ranked_by_id, profile, i)
+             for i, run in enumerate(_group(ids, by_id))]
+    built.sort(key=lambda c: c["peak_composite"], reverse=True)
+    for i, candidate in enumerate(built):
         candidate["id"] = i
-
-    uncertain = [_build(run, by_id, ranked_by_id, profile, i)
-                 for i, run in enumerate(_group(unsure, by_id))]
-    return {"candidates": candidates, "uncertain": uncertain}
+    return built
