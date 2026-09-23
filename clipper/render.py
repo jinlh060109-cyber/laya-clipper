@@ -16,6 +16,7 @@ from clipper.ingest import ffmpeg_tail
 from clipper.plan import plan_errors
 from clipper.preflight import preflight
 from clipper.run import Run
+from clipper.silence import speech_only
 
 MIN_CLIP_SECONDS = 10.0
 
@@ -97,7 +98,8 @@ def render_clip(ffmpeg: Path, source: Path, clip: dict,
 def run_render(run: Run, vertical: bool = False, captions: str = "burn") -> list[dict]:
     plan = run.read_json("plan.json")
     source_meta = run.read_json("source.json")
-    transcript = run.read_json("transcript.json")
+    # Captions show real talk only, never what Whisper invented over game audio.
+    transcript = speech_only(run.read_json("transcript.json"))
     errors = plan_errors(plan, source_meta["duration"])
     if errors:
         raise ValueError("plan.json cannot be rendered:\n" + "\n".join(errors))

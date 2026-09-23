@@ -193,3 +193,25 @@ def test_a_clip_with_no_speech_is_rendered_without_burned_subtitles(tmp_path, mo
                         lambda ffmpeg, source, clip, target, chain, cwd=None: chains.append(chain))
     render.run_render(run, captions="burn")
     assert "subtitles" not in (chains[0] or "")
+
+
+def test_invented_speech_is_not_burned_onto_a_gameplay_clip(tmp_path, monkeypatch):
+    """Whisper's 29 s 'dd-d-d-d-d-d' over game audio (the real run) is not a caption."""
+    from clipper import render
+    from clipper.run import Run
+
+    run = Run.create(tmp_path, "game")
+    run.write_json("source.json", {"path": "C:/src.mp4", "duration": 160.0,
+                                   "video": {"width": 1920, "height": 1080, "rotation": 0}})
+    run.write_json("transcript.json", {"language": "cy", "segments": [
+        {"start": 40.0, "end": 69.0, "speaker": "SPEAKER_00", "text": "dd-d-d-d-d-d",
+         "words": [{"word": "dd-d-d-d-d-d", "start": 40.0, "end": 69.0, "score": 0.0,
+                    "speaker": "SPEAKER_00"}]}]})
+    run.write_json("plan.json", {"clips": [{"in": 45.0, "out": 65.0, "title": "T"}]})
+    monkeypatch.setattr(render, "preflight",
+                        lambda **k: type("T", (), {"ffmpeg": Path("ffmpeg")})())
+    chains = []
+    monkeypatch.setattr(render, "render_clip",
+                        lambda ffmpeg, source, clip, target, chain, cwd=None: chains.append(chain))
+    render.run_render(run, captions="burn")
+    assert "subtitles" not in (chains[0] or "")
