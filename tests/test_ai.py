@@ -143,3 +143,19 @@ def test_available_providers_marks_the_configured_one(monkeypatch):
     listed = {p["id"]: p for p in ai.available_providers()}
     assert listed["anthropic"]["active"] is True
     assert listed["ollama"]["active"] is False
+
+
+def test_openai_compatible_requests_stay_within_common_output_limits(monkeypatch):
+    """DeepSeek and most OpenAI-compatible servers reject max_tokens above
+    8192; asking for Claude's 64000 would make every segmentation call fail."""
+    sent = {}
+
+    def fake_post(url, headers, json, timeout):
+        sent.update(body=json)
+        return types.SimpleNamespace(raise_for_status=lambda: None,
+                                     json=lambda: {"choices": [{"message": {"content": '{"x": 1}'}}]})
+
+    monkeypatch.setattr(ai.httpx, "post", fake_post)
+    config = ai.AIConfig("deepseek", "deepseek-chat", "k", "https://api.deepseek.com/v1")
+    ai.complete_json(config, "s", "u", SCHEMA, 64000)
+    assert sent["body"]["max_tokens"] == 8192

@@ -28,6 +28,7 @@ OPENAI_COMPATIBLE = {
 }
 PROVIDERS = ("anthropic", *OPENAI_COMPATIBLE)
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+OPENAI_MAX_TOKENS = 8192
 
 
 class AIError(RuntimeError):
@@ -163,7 +164,8 @@ def _openai_compatible(config: AIConfig, system: str, user: str, schema: dict,
                   "messages": [{"role": "system", "content": instructions},
                                {"role": "user", "content": user}],
                   "response_format": {"type": "json_object"},
-                  "max_tokens": max_tokens},
+                  # Claude takes 64000; most OpenAI-compatible servers cap at 8192.
+                  "max_tokens": min(max_tokens, OPENAI_MAX_TOKENS)},
             timeout=600.0,
         )
         response.raise_for_status()
