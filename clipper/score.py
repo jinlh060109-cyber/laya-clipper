@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from typing import Callable
 
 from clipper.profiles.loader import Profile
 
@@ -77,24 +78,32 @@ def answers_to_dict(response: dict, profile: Profile) -> dict[str, dict]:
     return out
 
 
-def score_windows(windows: list[dict], profile: Profile, agent) -> list[dict]:
+def score_windows(windows: list[dict], profile: Profile, agent,
+                  progress: Callable[[int, int], None] | None = None) -> list[dict]:
     """Score every window with one `system_one` call each.
 
     `agent` is anything exposing `system_one(state, questions)`. Scoring is
     synchronous: Laya is local and compute-bound, so there is nothing to overlap.
     A window whose call raises is marked `failed` and the run continues — losing
     3 of 540 windows is not a reason to discard an eight-minute transcription.
+
+    `progress(done, total)` is called after every window, failed or not.
     """
     questions = build_questions(profile)
     records: list[dict] = []
     for window in windows:
-        state = window_state(window, profile.name)
-        try:
-            response = agent.system_one(state, questions)
-            answers = answers_to_dict(response, profile)
-        except Exception as exc:  # noqa: BLE001 - any inference failure is per-window
-            records.append({"id": window["id"], "answers": {}, "failed": True,
-                            "error": f"{type(exc).__name__}: {exc}"})
-            continue
-        records.append({"id": window["id"], "answers": answers, "failed": False})
+        records.append(_score_one(window, profile, agent, questions))
+        if progress is not None:
+            progress(len(records), len(windows))
     return records
+
+
+def _score_one(window: dict, profile: Profile, agent, questions: dict) -> dict:
+    state = window_state(window, profile.name)
+    try:
+        response = agent.system_one(state, questions)
+        answers = answers_to_dict(response, profile)
+    except Exception as exc:  # noqa: BLE001 - any inference failure is per-window
+        return {"id": window["id"], "answers": {}, "failed": True,
+                "error": f"{type(exc).__name__}: {exc}"}
+    return {"id": window["id"], "answers": answers, "failed": False}

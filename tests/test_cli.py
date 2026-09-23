@@ -52,7 +52,7 @@ def test_plan_check_passes_a_clean_plan(capsys, tmp_path):
 def test_score_passes_the_device_through_and_reports_counts(capsys, tmp_path, monkeypatch):
     seen = {}
 
-    def fake_score(run, profile_name, device=None, agent=None):
+    def fake_score(run, profile_name, device=None, agent=None, progress=None):
         seen.update(profile=profile_name, device=device)
         return SUMMARY
 
@@ -88,7 +88,7 @@ def test_all_builds_windows_before_scoring(tmp_path, monkeypatch):
     monkeypatch.setattr("clipper.cli._ingest_and_transcribe", lambda *a, **k: run)
     scored = {}
 
-    def fake_score(r, profile_name, device=None, agent=None):
+    def fake_score(r, profile_name, device=None, agent=None, progress=None):
         scored["windows"] = r.read_json("windows.json")["windows"]
         return SUMMARY
 
@@ -189,3 +189,17 @@ def test_render_failure_is_reported_not_raised(capsys, tmp_path, monkeypatch):
     monkeypatch.setattr("clipper.cli.run_render", boom)
     assert main(["render", str(run.root)]) == 1
     assert "Invalid argument" in capsys.readouterr().err
+
+
+def test_score_prints_progress_while_it_runs(capsys, tmp_path, monkeypatch):
+    from clipper.run import Run
+    run = Run.create(tmp_path, "ep")
+
+    def fake_score(r, profile_name, device=None, agent=None, progress=None):
+        for i in range(1, 4):
+            progress(i, 3)
+        return SUMMARY
+
+    monkeypatch.setattr("clipper.cli.run_score", fake_score)
+    assert main(["score", str(run.root), "--profile", "podcast"]) == 0
+    assert "3/3" in capsys.readouterr().err

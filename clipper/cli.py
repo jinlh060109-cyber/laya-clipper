@@ -78,6 +78,13 @@ def _ingest_and_transcribe(video: Path, name: str | None, model: str,
     return run
 
 
+def _print_progress(done: int, total: int) -> None:
+    """One stderr line, rewritten in place, at most every 1% of the windows."""
+    if done == total or done % max(1, total // 100) == 0:
+        end = "\n" if done == total else ""
+        print(f"\rScoring windows: {done}/{total}", end=end, file=sys.stderr, flush=True)
+
+
 def _report_score(result: dict) -> None:
     print(f"{result['candidates']} candidates, {result['uncertain']} uncertain, "
           f"{result['failed']} failed windows (scored on {result['device']})")
@@ -133,7 +140,8 @@ def main(argv: list[str] | None = None) -> int:
 
         elif args.command == "score":
             run = Run.open(Path(args.run))
-            _report_score(run_score(run, args.profile, device=args.device))
+            _report_score(run_score(run, args.profile, device=args.device,
+                                    progress=_print_progress))
 
         elif args.command == "plan":
             run = Run.open(Path(args.run))
@@ -162,7 +170,8 @@ def main(argv: list[str] | None = None) -> int:
             run = _ingest_and_transcribe(video, args.run, args.model)
             if not run.exists("windows.json"):
                 write_windows(run)
-            _report_score(run_score(run, args.profile, device=args.device))
+            _report_score(run_score(run, args.profile, device=args.device,
+                                    progress=_print_progress))
             print(f"Artifacts in {run.root}.")
             print("Next: ask Claude to run the plan stage "
                   "(.claude/skills/clipper/SKILL.md), then `clipper render`.")

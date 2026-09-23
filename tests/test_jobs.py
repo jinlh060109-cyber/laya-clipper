@@ -66,7 +66,7 @@ def test_stages_run_in_order_and_finish(run):
 def test_an_explicit_profile_leaves_agent_loading_to_the_score_stage(run):
     log = []
     _go(JobRunner(recorder_stages(log)), run)
-    _, profile, _, agent = dict(log)["score"]
+    _, profile, _, agent, _ = dict(log)["score"]
     assert profile == "podcast"
     assert agent is None
 
@@ -76,7 +76,7 @@ def test_auto_loads_one_agent_and_reuses_it_for_scoring(run):
     status = _go(JobRunner(recorder_stages(log)), run, profile="auto")
     assert [name for name, _ in log] == ["ingest", "transcribe", "windows",
                                          "load_agent", "choose_profile", "score"]
-    _, profile, _, agent = dict(log)["score"]
+    _, profile, _, agent, _ = dict(log)["score"]
     assert profile == "stream"
     assert agent == AGENT
     assert status["profile"] == "stream"
@@ -194,3 +194,26 @@ def test_a_normal_stage_failure_is_persisted_to_job_json(run):
     assert job_json["state"] == "failed"
     assert job_json["failed_stage"] == "transcribe"
     assert "transcribe exploded" in job_json["error"]
+
+
+def test_status_reports_scoring_progress(run):
+    gate = threading.Event()
+    log = []
+    stages = recorder_stages(log)
+
+    def slow_score(run_, profile, settings, agent, progress):
+        progress(2, 5)
+        gate.wait(5)
+        return {"scored": 5, "failed": 0, "candidates": 1, "uncertain": 0, "device": "cpu"}
+
+    stages.score = slow_score
+    runner = JobRunner(stages)
+    _go(runner, run)
+    for _ in range(200):
+        if runner.status().get("progress"):
+            break
+        threading.Event().wait(0.01)
+    assert runner.status()["progress"] == {"stage": "score", "done": 2, "total": 5}
+    gate.set()
+    runner.wait(5)
+    assert runner.status()["state"] == "done"

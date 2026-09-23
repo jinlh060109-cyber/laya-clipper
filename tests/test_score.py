@@ -173,3 +173,11 @@ def test_malformed_response_from_agent_is_caught_and_window_marked_failed():
     # Remaining windows should also be attempted (agent called 3 times)
     assert records[1]["failed"] is True
     assert records[2]["failed"] is True
+
+
+def test_score_windows_reports_progress_after_every_window_including_failures():
+    from clipper.score import score_windows
+    seen = []
+    score_windows([win(0), win(1, 10.0, 40.0), win(2, 20.0, 50.0)], load_profile("podcast"),
+                  FakeAgent(fail_on={1}), progress=lambda done, total: seen.append((done, total)))
+    assert seen == [(1, 3), (2, 3), (3, 3)]

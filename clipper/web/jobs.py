@@ -28,7 +28,7 @@ class Stages:
     windows: Callable[[Run], Any]
     load_agent: Callable[[Run, dict], tuple]
     choose_profile: Callable[[Run, Any], dict]
-    score: Callable[[Run, str, dict, "tuple | None"], dict]
+    score: Callable[[Run, str, dict, "tuple | None", Callable[[int, int], None]], dict]
 
 
 def default_stages() -> Stages:
@@ -57,8 +57,9 @@ def default_stages() -> Stages:
     def choose_stage(run: Run, agent) -> dict:
         return choose_profile(run.read_json("windows.json")["windows"], agent)
 
-    def score_stage(run: Run, profile: str, settings: dict, agent) -> dict:
-        return run_score(run, profile, device=settings["device"], agent=agent)
+    def score_stage(run: Run, profile: str, settings: dict, agent, progress) -> dict:
+        return run_score(run, profile, device=settings["device"], agent=agent,
+                         progress=progress)
 
     return Stages(ingest_stage, transcribe_stage, write_windows,
                   load_stage, choose_stage, score_stage)
@@ -78,6 +79,7 @@ class Job:
     votes: dict | None = None
     fallback: bool = False
     result: dict | None = None
+    progress: dict | None = None
     started: float = field(default_factory=time.time)
     finished: float | None = None
 
@@ -87,6 +89,7 @@ class Job:
                 "error": self.error, "failed_stage": self.failed_stage,
                 "profile": self.profile, "votes": self.votes,
                 "fallback": self.fallback, "result": self.result,
+                "progress": self.progress,
                 "started": self.started, "finished": self.finished}
 
 
@@ -226,8 +229,15 @@ class JobRunner:
                 recorded["profile_fallback"] = bool(picked.get("fallback"))
             run.write_json("settings.json", recorded)
 
+            def report(done: int, total: int) -> None:
+                # In memory only: status() is polled every second, and writing
+                # job.json once per window would cost more than the update.
+                with self._lock:
+                    job.progress = {"stage": "score", "done": done, "total": total}
+
             result = self._step(job, "score",
-                                lambda: stages.score(run, picked["profile"], settings, agent))
+                                lambda: stages.score(run, picked["profile"], settings,
+                                                     agent, report))
             # Marking "done" is part of the same protected body: if this
             # persist fails too, the catch-all below still ends the job
             # rather than leaving it stuck "running".

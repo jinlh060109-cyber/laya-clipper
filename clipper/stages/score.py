@@ -9,7 +9,7 @@ from clipper.score import score_windows
 
 
 def run_score(run: Run, profile_name: str, device: str | None = None,
-              agent=None) -> dict:
+              agent=None, progress=None) -> dict:
     """Score every window and write scores.json plus candidates.json.
 
     Synchronous by design: Laya runs locally and is compute-bound, so there is
@@ -27,7 +27,7 @@ def run_score(run: Run, profile_name: str, device: str | None = None,
     else:
         agent_obj, meta = agent
 
-    records = score_windows(windows, profile, agent_obj)
+    records = score_windows(windows, profile, agent_obj, progress=progress)
     ranked = rank(records, profile)
     merged = merge_candidates(windows, ranked, profile)
 

@@ -69,7 +69,8 @@ def build_cues(words: list[dict], max_chars: int = 42,
 
     for word in words:
         if buffer:
-            too_long = display_width(join_words([w["word"] for w in buffer + [word]])) > max_chars
+            text = join_words([w["word"] for w in buffer + [word]])
+            too_long = display_width(text) > max_chars
             too_slow = word["end"] - buffer[0]["start"] > max_seconds
             changed = word["speaker"] != buffer[0]["speaker"]
             if too_long or too_slow or changed:
