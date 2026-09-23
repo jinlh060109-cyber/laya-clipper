@@ -345,3 +345,20 @@ def test_ffmpeg_output_with_non_ascii_metadata_is_decoded_as_utf8(tmp_path):
                    check=True)
     assert probe_source(Path(ffprobe), video)["duration"] > 1
     assert len(per_second_rms(Path(ffmpeg), video, 2.0)) == 2
+
+
+def test_per_second_rms_with_real_ffmpeg_measures_whole_seconds(tmp_path):
+    """astats reset=1 resets per audio frame (~64 ms); each value must cover one second."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("ffmpeg not on PATH")
+    wav = tmp_path / "burst.wav"
+    # 3 s near-silence, 1 s loud tone, 2 s near-silence, at 16 kHz mono.
+    subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i",
+                    "sine=frequency=440:sample_rate=16000:duration=6",
+                    "-af", "volume='if(between(t,3,4),1,0.001)':eval=frame",
+                    "-ac", "1", str(wav)], check=True)
+    levels = per_second_rms(Path(ffmpeg), wav, 6.0)
+    assert len(levels) == 6
+    assert levels.index(max(levels)) == 3
+    assert levels[3] > 3 * max(levels[:3] + levels[4:])  # tone bleeds ~1 frame into s4

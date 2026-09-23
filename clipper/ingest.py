@@ -113,10 +113,17 @@ def extract_audio(ffmpeg: Path, video: Path, dest: Path) -> None:
 
 
 def per_second_rms(ffmpeg: Path, wav: Path, duration: float) -> list[float]:
-    """One RMS value per second, via ffmpeg's astats filter."""
+    """One RMS value per second, via ffmpeg's astats filter.
+
+    astats' `reset=1` resets per audio *frame* (about 64 ms of a decoded wav),
+    not per second, so the stream is first cut into exact one-second frames.
+    Without that, the curve described the first few minutes of the source
+    squeezed onto its whole duration.
+    """
     result = subprocess.run(
         [str(ffmpeg), "-v", "info", "-i", str(wav),
-         "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
+         "-af", "aresample=16000,asetnsamples=n=16000:p=0,"
+                "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
          "-f", "null", "-"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
