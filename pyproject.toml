@@ -7,6 +7,7 @@ dependencies = [
     "whisperx",
     "pyyaml",
     "httpx",
+    "anthropic>=1",
 ]
 
 [project.optional-dependencies]
