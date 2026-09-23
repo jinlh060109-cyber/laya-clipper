@@ -9,12 +9,15 @@ import json
 import os
 from pathlib import Path
 
+from clipper.captions import CAPTION_STYLES
 from clipper.filters import LAYOUTS
 from clipper.hardware import ENCODERS
 
 DEFAULT = {"layout": "fit", "vertical": True, "captions": "burn",
-           "caption_case": "sentence", "encoder": "auto", "notes": ""}
+           "caption_style": "classic", "caption_case": "sentence", "encoder": "auto",
+           "notes": ""}
 CHOICES = {"layout": LAYOUTS, "captions": ("burn", "sidecar", "none"),
+           "caption_style": tuple(CAPTION_STYLES),
            "caption_case": ("sentence", "upper"),
            "encoder": ("auto", *(eid for eid, _, _ in ENCODERS))}
 MAX_NOTES = 4000

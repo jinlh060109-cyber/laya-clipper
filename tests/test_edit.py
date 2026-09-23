@@ -125,3 +125,47 @@ def test_ffmpeg_reports_only_errors_so_the_real_error_is_quoted():
     for cmd in (edit.cut_command("ffmpeg", Path("s.mp4"), 0.0, 20.0, Path("c.mp4"), "libx264"),
                 edit.final_command("ffmpeg", Path("s.mp4"), 0.0, 20.0, Path("f.mp4"), None, "libx264")):
         assert cmd[cmd.index("-loglevel") + 1] == "error"
+
+
+def test_the_chosen_caption_style_shapes_the_burned_captions(tmp_path, monkeypatch):
+    words = [{"word": w, "start": 1.0 + i, "end": 1.8 + i, "score": 0.9, "speaker": "S"}
+             for i, w in enumerate("Here is the trick.".split())]
+    run = _run(tmp_path, tmp_path / "src.mp4", [_clip("c0", 1.0, 13.0)], words)
+    seen = {}
+    real_render_ass = edit.render_ass
+
+    def spy(cues, height, **kw):
+        seen.update(kw, words_per_cue=[len(c.words) for c in cues])
+        return real_render_ass(cues, height, **kw)
+
+    monkeypatch.setattr(edit, "render_ass", spy)
+    monkeypatch.setattr(edit.subprocess, "run",
+                        lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "", ""))
+    edit.run_edit(run, {**DEFAULT, "caption_style": "one_word"}, ffmpeg="ffmpeg", encoders=[])
+    assert seen["preset"] == "one_word" and set(seen["words_per_cue"]) == {1}
+    spec = json.loads(next(run.clips_dir().glob("*/edit.json")).read_text(encoding="utf-8"))
+    assert spec["caption_style"] == "one_word"
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+def test_preview_is_one_frame_of_the_clip_in_the_chosen_style(tmp_path):
+    source = tmp_path / "src.mp4"
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=30:size=640x360:rate=25",
+                    "-c:v", "libx264", str(source)], capture_output=True, check=True)
+    words = [{"word": w, "start": 1.0 + i * 0.4, "end": 1.3 + i * 0.4, "score": 0.9, "speaker": "S"}
+             for i, w in enumerate("Here is the trick and it works.".split())]
+    run = _run(tmp_path, source, [_clip("c0", 1.0, 13.0)], words)
+    image = edit.preview_frame(run, "c0", {**DEFAULT, "caption_style": "boxed"},
+                               ffmpeg=shutil.which("ffmpeg"))
+    assert image[:2] == b"\xff\xd8"  # a JPEG
+    out = tmp_path / "p.jpg"
+    out.write_bytes(image)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
+                            "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True)
+    assert probe.stdout.strip() == "540,960"  # half-size vertical frame
+
+
+def test_preview_of_an_unknown_clip_is_refused(tmp_path):
+    run = _run(tmp_path, tmp_path / "src.mp4", [_clip("c0", 1.0, 13.0)])
+    with pytest.raises(ValueError, match="c7"):
+        edit.preview_frame(run, "c7", DEFAULT, ffmpeg="ffmpeg")

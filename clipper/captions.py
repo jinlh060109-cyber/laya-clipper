@@ -134,20 +134,78 @@ def render_srt(cues: list[Cue]) -> str:
 
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
-WrapStyle: 2
+WrapStyle: 0
 ScaledBorderAndShadow: yes
 PlayResX: {play_x}
 PlayResY: {play_y}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Arial,{size},&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{outline},1,2,60,60,{margin},1
+{caption_style}
 Style: Speaker,Arial,{speaker_size},&H00D0D0D0,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,1,40,40,{speaker_margin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
+
+# Caption looks the user can pick. Colours are ASS &HAABBGGRR. With karaoke,
+# each word starts in `secondary` and turns `primary` as it is spoken.
+# `max_chars` keeps a line inside a 1080 px frame at that font size (a
+# character is about 0.55 x the size wide); libass wraps anything longer.
+CAPTION_STYLES: dict[str, dict] = {
+    "classic": {"label": "Classic: white, words turn gold as spoken",
+                "font": "Arial", "bold": True, "scale": 1.35, "primary": "&H0000D7FF",
+                "secondary": "&H00FFFFFF", "outline_colour": "&H00000000",
+                "back": "&H80000000", "border": 1, "outline": 4, "shadow": 1,
+                "karaoke": True, "upper": False, "max_chars": 26, "tags": ""},
+    "bold": {"label": "Bold: big UPPERCASE, words turn green",
+             "font": "Arial Black", "bold": True, "scale": 1.6, "primary": "&H0000FF7F",
+             "secondary": "&H00FFFFFF", "outline_colour": "&H00000000",
+             "back": "&H80000000", "border": 1, "outline": 6, "shadow": 2,
+             "karaoke": True, "upper": True, "max_chars": 18, "tags": ""},
+    "boxed": {"label": "Boxed: white text on a dark box",
+              "font": "Arial", "bold": True, "scale": 1.25, "primary": "&H00FFFFFF",
+              "secondary": "&H00FFFFFF", "outline_colour": "&H90000000",
+              "back": "&H90000000", "border": 3, "outline": 14, "shadow": 0,
+              "karaoke": False, "upper": False, "max_chars": 28, "tags": ""},
+    "minimal": {"label": "Minimal: clean white with a soft shadow",
+                "font": "Arial", "bold": False, "scale": 1.2, "primary": "&H00FFFFFF",
+                "secondary": "&H00FFFFFF", "outline_colour": "&H00000000",
+                "back": "&H00000000", "border": 1, "outline": 1, "shadow": 3,
+                "karaoke": False, "upper": False, "max_chars": 30, "tags": ""},
+    "one_word": {"label": "One word: a single big word at a time, popping in",
+                 "font": "Arial Black", "bold": True, "scale": 2.4, "primary": "&H0000E5FF",
+                 "secondary": "&H0000E5FF", "outline_colour": "&H00000000",
+                 "back": "&H80000000", "border": 1, "outline": 8, "shadow": 2,
+                 "karaoke": False, "upper": True, "max_chars": 0,
+                 "tags": r"{\fscx125\fscy125\t(0,120,\fscx100\fscy100)}"},
+    "neon": {"label": "Neon: glowing cyan outline, words turn pink",
+             "font": "Arial", "bold": True, "scale": 1.45, "primary": "&H00FF40FF",
+             "secondary": "&H00FFFFFF", "outline_colour": "&H00FFFF00",
+             "back": "&H00000000", "border": 1, "outline": 5, "shadow": 0,
+             "karaoke": True, "upper": False, "max_chars": 25, "tags": r"{\blur4}"},
+}
+
+
+def _preset(name: str) -> dict:
+    if name not in CAPTION_STYLES:
+        raise ValueError(f"Unknown caption style {name!r}. "
+                         f"Valid: {', '.join(CAPTION_STYLES)}.")
+    return CAPTION_STYLES[name]
+
+
+def cues_for(words: list[dict], preset: str = "classic") -> list[Cue]:
+    """Caption lines shaped for a style: one word at a time, or short lines."""
+    look = _preset(preset)
+    if look["max_chars"] == 0:
+        cues = []
+        for i, word in enumerate(words):
+            nxt = words[i + 1]["start"] if i + 1 < len(words) else word["end"]
+            cues.append(Cue(start=word["start"], end=max(word["end"], min(nxt, word["start"] + 1.0)),
+                            words=[word], speaker=word["speaker"]))
+        return cues
+    return build_cues(words, max_chars=look["max_chars"])
 
 def font_size_for_height(height: int) -> int:
     """Reference guide: 720p -> 20, 1080p -> 24, 4K -> 48."""
@@ -172,6 +230,11 @@ def _escape(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")")
 
 
+def _plain(cue: Cue, uppercase: bool = False) -> str:
+    text = join_words([w["word"] for w in cue.words])
+    return _escape(text.upper() if uppercase else text)
+
+
 def _karaoke(cue: Cue, uppercase: bool = False) -> str:
     # \k durations are cumulative from the line start, so each word holds until
     # the next begins; using word length alone drifts early after every pause.
@@ -193,24 +256,32 @@ def _karaoke(cue: Cue, uppercase: bool = False) -> str:
 
 def render_ass(cues: list[Cue], height: int,
                speakers: dict[str, str] | None = None,
-               uppercase: bool = False, layout: str = "crop") -> str:
+               uppercase: bool = False, layout: str = "crop",
+               preset: str = "classic") -> str:
     """`layout="fit"` on a vertical render puts the captions just under the
-    picture, which then sits in the middle of the frame."""
-    size = font_size_for_height(height)
+    picture, which then sits in the middle of the frame. `preset` is one of
+    CAPTION_STYLES."""
+    look = _preset(preset)
+    uppercase = uppercase or look["upper"]
+    size = int(font_size_for_height(height) * look["scale"])
     under_picture = layout == "fit" and height >= 1920
+    margin = int(height * (0.27 if under_picture else 0.08))
+    caption_style = (
+        f"Style: Caption,{look['font']},{size},{look['primary']},{look['secondary']},"
+        f"{look['outline_colour']},{look['back']},{-1 if look['bold'] else 0},0,0,0,"
+        f"100,100,0,0,{look['border']},{look['outline']},{look['shadow']},2,60,60,{margin},1")
     header = ASS_HEADER.format(
         play_x=int(height * 9 / 16) if height >= 1920 else int(height * 16 / 9),
         play_y=height,
-        size=size,
-        outline=max(1, size // 10),
-        margin=int(height * (0.27 if under_picture else 0.08)),
-        speaker_size=max(14, int(size * 0.7)),
+        caption_style=caption_style,
+        speaker_size=max(14, int(font_size_for_height(height) * 0.7)),
         speaker_margin=int(height * 0.04),
     )
     lines: list[str] = []
     for cue in cues:
         start, end = format_ass_time(cue.start), format_ass_time(cue.end)
-        lines.append(f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{_karaoke(cue, uppercase)}")
+        text = _karaoke(cue, uppercase) if look["karaoke"] else _plain(cue, uppercase)
+        lines.append(f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{look['tags']}{text}")
         name = (speakers or {}).get(cue.speaker)
         if name:
             lines.append(

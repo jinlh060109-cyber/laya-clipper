@@ -26,6 +26,7 @@ def edit_spec(clip: dict, style: dict, fill: dict | None, content_type: str,
         "caption_quote": fill.get("caption_quote", ""),
         "punch_ins": fill.get("punch_ins", []),
         "fill_in_used": bool(fill),
+        "caption_style": style.get("caption_style", "classic"),
         **{key: style[key] for key in ("layout", "vertical", "captions",
                                        "caption_case", "encoder")},
     }

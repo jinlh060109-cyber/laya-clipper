@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from clipper.captions import build_cues, rebase, render_ass, render_srt, words_in_range
+from clipper.captions import cues_for, rebase, render_ass, render_srt, words_in_range
 from clipper.fillin import clip_slice
 from clipper.filters import build_filter_chain
 from clipper.hardware import encoder_args, pick_encoder, probe_encoders
@@ -94,6 +94,45 @@ def _ffmpeg(cmd: list[str], output: Path, cwd: Path | None = None) -> None:
                            f"{ffmpeg_tail(result.stderr)}")
 
 
+def preview_frame(run: Run, clip_id: str, style: dict, ffmpeg=None) -> bytes:
+    """One half-size JPEG frame of a clip as it will look: layout and caption
+    style applied, taken while a caption is on screen."""
+    clip = next((c for c in run.read_json("selection.json")["clips"] if c["id"] == clip_id), None)
+    if clip is None:
+        raise ValueError(f"Unknown clip id {clip_id!r}.")
+    source_meta = run.read_json("source.json")
+    ffmpeg = ffmpeg or preflight(require_subtitles=True).ffmpeg
+    width, height = display_size(source_meta["video"])
+    vertical, layout = style["vertical"], style["layout"]
+    preset = style.get("caption_style", "classic")
+    transcript = speech_only(run.read_json("transcript.json"))
+    cues = cues_for(words_in_range(transcript, clip["start"], clip["end"]), preset)
+    # A moment a little into a caption, so the word highlighting shows.
+    cue = next((c for c in cues if len(c.words) > 1), cues[0] if cues else None)
+    at = cue.start + 0.6 * (cue.end - cue.start) if cue else (clip["start"] + clip["end"]) / 2
+    shown = rebase(cues, at) if style["captions"] == "burn" else []
+    out_height = 1920 if vertical else height
+
+    def grab(chain: str | None, cwd: Path | None) -> bytes:
+        vf = ",".join(part for part in (chain, "scale=iw/2:ih/2") if part)
+        cmd = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-ss", f"{at:.3f}",
+               "-i", str(Path(source_meta["path"]).resolve()), "-frames:v", "1",
+               "-vf", vf, "-f", "image2", "-c:v", "mjpeg", "-q:v", "4", "pipe:1"]
+        result = subprocess.run(cmd, capture_output=True, check=False, cwd=cwd)
+        if result.returncode != 0 or not result.stdout:
+            raise RuntimeError("Could not render the preview:\n"
+                               + ffmpeg_tail(result.stderr.decode("utf-8", "replace")))
+        return result.stdout
+
+    if shown:
+        ass = render_ass(shown, out_height, uppercase=style["caption_case"] == "upper",
+                         layout=layout, preset=preset)
+        with staged_subtitles(ass, ".ass") as staged:
+            return grab(build_filter_chain(width, height, vertical, Path(staged.name),
+                                           layout=layout), staged.parent)
+    return grab(build_filter_chain(width, height, vertical, None, layout=layout), None)
+
+
 def run_edit(run: Run, style: dict, fills: dict | None = None,
              progress: Callable[[int, int], None] | None = None,
              ffmpeg=None, encoders: list[str] | None = None) -> list[dict]:
@@ -129,7 +168,8 @@ def run_edit(run: Run, style: dict, fills: dict | None = None,
         folder.mkdir(parents=True, exist_ok=True)
 
         spec = edit_spec(clip, style, fill, content_type, stem)
-        cues = rebase(build_cues(words_in_range(transcript, start, end)), start)
+        preset = style.get("caption_style", "classic")
+        cues = rebase(cues_for(words_in_range(transcript, start, end), preset), start)
         (folder / "edit.json").write_text(json.dumps(spec, indent=2, ensure_ascii=False),
                                           encoding="utf-8")
         (folder / "prompt.md").write_text(
@@ -148,7 +188,7 @@ def run_edit(run: Run, style: dict, fills: dict | None = None,
         final = folder / "final.mp4"
         if style["captions"] == "burn" and cues:
             ass = render_ass(cues, out_height, uppercase=style["caption_case"] == "upper",
-                             layout=style["layout"])
+                             layout=style["layout"], preset=preset)
             with staged_subtitles(ass, ".ass") as staged:
                 chain = build_filter_chain(width, height, vertical, Path(staged.name),
                                            layout=style["layout"])
