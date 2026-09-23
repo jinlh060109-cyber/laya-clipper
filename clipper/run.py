@@ -72,5 +72,7 @@ class Run:
 
 
 def default_run_name(video: Path) -> str:
-    stem = re.sub(r"[^a-z0-9]+", "-", video.stem.lower()).strip("-") or "run"
+    # \w keeps letters of every script, so non-Latin names stay distinct
+    # instead of all collapsing to "run".
+    stem = re.sub(r"[\W_]+", "-", video.stem.lower()).strip("-") or "run"
     return f"{date.today().isoformat()}-{stem}"

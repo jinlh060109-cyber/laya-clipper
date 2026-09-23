@@ -288,7 +288,7 @@ def test_ingest_writes_source_json_through_run_write_json(tmp_path, monkeypatch)
 
     result = ingest(Path("ffmpeg"), Path("ffprobe"), Path("/videos/ep47.mp4"), run)
 
-    assert result["path"] == "/videos/ep47.mp4"
+    assert result["path"] == Path("/videos/ep47.mp4").resolve().as_posix()
     assert result["duration"] == pytest.approx(3.0)
     assert result["container"] == "mp4"
     assert result["video"] == {
@@ -362,3 +362,48 @@ def test_per_second_rms_with_real_ffmpeg_measures_whole_seconds(tmp_path):
     assert len(levels) == 6
     assert levels.index(max(levels)) == 3
     assert levels[3] > 3 * max(levels[:3] + levels[4:])  # tone bleeds ~1 frame into s4
+
+
+def _fake_ingest_run(cmd, **kwargs):
+    if "-show_streams" in cmd:
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_INGEST_PROBE), stderr="")
+    if "-af" in cmd:
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr=_rms_stderr("-20.0"))
+    Path(cmd[-1]).write_bytes(b"fake-wav-bytes")
+    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+
+def test_ingest_stores_an_absolute_path_and_the_file_size(tmp_path, monkeypatch):
+    """render resolves source.json's path later, possibly from another directory."""
+    video = tmp_path / "ep47.mp4"
+    video.write_bytes(b"x" * 1234)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("clipper.ingest.subprocess.run", _fake_ingest_run)
+    out = ingest(Path("ffmpeg"), Path("ffprobe"), Path("ep47.mp4"), Run.create(tmp_path, "r"))
+    assert Path(out["path"]).is_absolute()
+    assert Path(out["path"]) == video.resolve()
+    assert out["size"] == 1234
+
+
+def test_a_run_holding_another_video_is_refused(tmp_path):
+    from clipper.ingest import check_same_source
+
+    run = Run.create(tmp_path, "r")
+    first, second = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    first.write_bytes(b"a")
+    second.write_bytes(b"bb")
+    run.write_json("source.json", {"path": first.resolve().as_posix(), "size": 1})
+    check_same_source(run, first)                      # same video: fine
+    with pytest.raises(ValueError, match="--run"):
+        check_same_source(run, second)
+    first.write_bytes(b"changed")                      # same path, different file
+    with pytest.raises(ValueError, match="--run"):
+        check_same_source(run, first)
+
+
+def test_a_fresh_run_accepts_any_video(tmp_path):
+    from clipper.ingest import check_same_source
+
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"a")
+    check_same_source(Run.create(tmp_path, "r"), video)

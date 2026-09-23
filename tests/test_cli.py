@@ -134,3 +134,26 @@ def test_web_no_browser_does_not_open_one(monkeypatch):
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
     assert main(["web", "--no-browser"]) == 0
     assert opened == []
+
+
+def test_default_run_name_keeps_non_latin_names_apart():
+    a = default_run_name(Path("访谈第一集.mp4"))
+    b = default_run_name(Path("第二集.mp4"))
+    assert a != b
+    assert a.endswith("访谈第一集")
+
+
+def test_all_refuses_to_reuse_a_run_that_holds_another_video(capsys, tmp_path, monkeypatch):
+    from clipper.run import Run
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("clipper.cli.RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr("clipper.cli.preflight", lambda **k: None)
+    old, new = tmp_path / "old.mp4", tmp_path / "new.mp4"
+    old.write_bytes(b"old")
+    new.write_bytes(b"new!")
+    run = Run.create(tmp_path / "runs", "ep")
+    run.write_json("source.json", {"path": old.resolve().as_posix(), "size": 3})
+    run.write_json("transcript.json", {"language": "en", "segments": []})
+    assert main(["all", str(new), "--profile", "podcast", "--run", "ep"]) == 1
+    assert "--run" in capsys.readouterr().err

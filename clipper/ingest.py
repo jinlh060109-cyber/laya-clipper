@@ -146,8 +146,41 @@ def per_second_rms(ffmpeg: Path, wav: Path, duration: float) -> list[float]:
     return levels[:expected]
 
 
+def _size(video: Path) -> int | None:
+    try:
+        return video.stat().st_size
+    except OSError:
+        return None
+
+
+def check_same_source(run: Run, video: Path) -> None:
+    """Refuse to reuse a run whose artifacts came from a different video.
+
+    Stages skip work whose artifact already exists, so a name collision would
+    otherwise score one video's transcript and render another video's frames.
+    """
+    if not run.exists("source.json"):
+        return
+    source = run.read_json("source.json")
+    stored = source.get("path")
+    if not stored:
+        return
+    same_path = Path(stored).resolve() == video.resolve()
+    same_size = source.get("size") in (None, _size(video))
+    if not (same_path and same_size):
+        raise ValueError(
+            f"{run.root} already holds a different video ({stored}). "
+            f"Pass --run <new name> to start a separate run."
+        )
+
+
 def ingest(ffmpeg: Path, ffprobe: Path, video: Path, run: Run) -> dict:
+    # Absolute, so render finds the source whatever directory it runs from.
+    video = video.resolve()
     source = probe_source(ffprobe, video)
+    size = _size(video)
+    if size is not None:
+        source["size"] = size
     wav = run.path("audio.wav")
     extract_audio(ffmpeg, video, wav)
     raw = per_second_rms(ffmpeg, wav, source["duration"])

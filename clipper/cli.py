@@ -7,7 +7,7 @@ from pathlib import Path
 
 from clipper.agent import AgentError
 from clipper.device import VALID as DEVICES
-from clipper.ingest import ingest
+from clipper.ingest import check_same_source, ingest
 from clipper.plan import check_plan
 from clipper.preflight import PreflightError, preflight
 from clipper.profiles.loader import ProfileError
@@ -69,6 +69,7 @@ def _ingest_and_transcribe(video: Path, name: str | None, model: str,
                            diarize: bool = True) -> Run:
     tools = preflight(require_subtitles=False)
     run = Run.create(RUNS_DIR, name or default_run_name(video))
+    check_same_source(run, video)
     if not run.exists("source.json"):
         ingest(tools.ffmpeg, tools.ffprobe, video, run)
     if not run.exists("transcript.json"):
@@ -113,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             tools = preflight(require_subtitles=False)
             video = Path(args.video)
             run = Run.create(RUNS_DIR, args.run or default_run_name(video))
+            check_same_source(run, video)
             source = ingest(tools.ffmpeg, tools.ffprobe, video, run)
             print(f"{run.root}: {source['duration']:.1f}s, "
                   f"{source['video']['width']}x{source['video']['height']}")
