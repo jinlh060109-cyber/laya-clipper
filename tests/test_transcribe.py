@@ -117,3 +117,57 @@ def test_leading_and_trailing_unaligned_runs_anchor_to_segment_bounds():
     words = out["segments"][0]["words"]
     for prev_w, next_w in zip(words, words[1:]):
         assert prev_w["end"] <= next_w["start"] + 1e-9
+
+
+def _fake_whisperx(monkeypatch, diarize_calls):
+    import sys
+    import types
+
+    result = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    wx = types.ModuleType("whisperx")
+    wx.load_audio = lambda path: "audio"
+    wx.load_model = lambda *a, **k: types.SimpleNamespace(
+        transcribe=lambda audio, batch_size: {"language": "en", "segments": result["segments"]})
+    wx.load_align_model = lambda **k: ("align", {})
+    wx.align = lambda segments, *a, **k: {"segments": segments}
+    wx.assign_word_speakers = lambda diarized, result: result
+    diarize = types.ModuleType("whisperx.diarize")
+
+    class DiarizationPipeline:
+        def __init__(self, use_auth_token, device):
+            diarize_calls.append(use_auth_token)
+
+        def __call__(self, audio):
+            return "segments"
+
+    diarize.DiarizationPipeline = DiarizationPipeline
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "whisperx", wx)
+    monkeypatch.setitem(sys.modules, "whisperx.diarize", diarize)
+
+
+def test_no_token_means_no_diarization_even_when_hf_token_is_in_the_environment(
+        tmp_path, monkeypatch):
+    """Callers pass hf_token=None to switch diarization off (--no-diarize, the web toggle)."""
+    from clipper.run import Run
+    from clipper.transcribe import transcribe
+
+    calls = []
+    _fake_whisperx(monkeypatch, calls)
+    monkeypatch.setenv("HF_TOKEN", "hf_from_env")
+    out = transcribe(tmp_path / "audio.wav", Run.create(tmp_path, "r"), hf_token=None)
+    assert calls == []
+    assert out["diarized"] is False
+
+
+def test_a_passed_token_diarizes(tmp_path, monkeypatch):
+    from clipper.run import Run
+    from clipper.transcribe import transcribe
+
+    calls = []
+    _fake_whisperx(monkeypatch, calls)
+    out = transcribe(tmp_path / "audio.wav", Run.create(tmp_path, "r"), hf_token="hf_x")
+    assert calls == ["hf_x"]
+    assert out["diarized"] is True

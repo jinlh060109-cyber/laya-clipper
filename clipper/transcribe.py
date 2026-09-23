@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from clipper.run import Run
@@ -80,15 +79,16 @@ def transcribe(wav: Path, run: Run, model: str = "large-v3",
     result = whisperx.align(result["segments"], align_model, metadata,
                             audio, device, return_char_alignments=False)
 
-    token = hf_token or os.environ.get("HF_TOKEN")
+    # The caller decides: None means "do not diarize" (--no-diarize, the web
+    # toggle), so there is deliberately no fallback to $HF_TOKEN here.
     diarized = False
-    if token:
+    if hf_token:
         from whisperx.diarize import DiarizationPipeline
-        pipeline = DiarizationPipeline(use_auth_token=token, device=device)
+        pipeline = DiarizationPipeline(use_auth_token=hf_token, device=device)
         result = whisperx.assign_word_speakers(pipeline(audio), result)
         diarized = True
     else:
-        print("HF_TOKEN not set; skipping diarization. All speech labelled SPEAKER_00.")
+        print("Diarization off (no HF_TOKEN, or switched off). All speech labelled SPEAKER_00.")
 
     transcript = normalize_transcript(result, model, diarized, language)
     run.write_json("transcript.json", transcript)
