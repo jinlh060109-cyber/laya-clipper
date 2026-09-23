@@ -92,6 +92,19 @@ def validate_settings(body: dict) -> dict:
             "prompt": str(body.get("prompt") or "").strip()[:2000]}
 
 
+class _CountingReader:
+    """Wraps the request body stream and remembers how much has been read."""
+
+    def __init__(self, stream) -> None:
+        self.stream = stream
+        self.consumed = 0
+
+    def read(self, size: int = -1) -> bytes:
+        data = self.stream.read(size)
+        self.consumed += len(data)
+        return data
+
+
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # noqa: A002 - quiet console
@@ -125,21 +138,37 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             else:
                 self._json(404, {"error": "Not found."})
 
+        def _refuse(self, status: int, message: str, body: _CountingReader) -> None:
+            # Read and discard whatever of the body is still in flight before
+            # answering. Closing a socket with unread data makes Windows send
+            # a reset, and the client then sees "connection aborted" instead
+            # of this message.
+            remaining = self._length() - body.consumed
+            while remaining > 0:
+                chunk = body.read(min(CHUNK, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            self.close_connection = True
+            self._json(status, {"error": message})
+
         def do_PUT(self) -> None:
             url = urlparse(self.path)
+            body = _CountingReader(self.rfile)
             if url.path != "/api/upload":
-                self._json(404, {"error": "Not found."})
+                self._refuse(404, "Not found.", body)
                 return
             name = parse_qs(url.query).get("name", [""])[0]
             try:
-                run = app.receive_upload(name, self.rfile, self._length())
+                run = app.receive_upload(name, body, self._length())
             except JobBusy as error:
-                self.close_connection = True
-                self._json(409, {"error": str(error)})
+                self._refuse(409, str(error), body)
                 return
             except ValueError as error:
-                self.close_connection = True
-                self._json(400, {"error": str(error)})
+                self._refuse(400, str(error), body)
+                return
+            except OSError as error:
+                self._refuse(500, f"Could not save the upload: {error}", body)
                 return
             self._json(200, {"run": run})
 

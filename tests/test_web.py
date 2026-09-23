@@ -169,3 +169,23 @@ def test_the_page_calls_every_api_route_and_names_every_stage(server):
         assert route in page
     for stage in STAGES:
         assert f'"{stage}"' in page
+
+
+def test_a_refused_large_upload_still_gets_its_error_message(server):
+    """The server must read (discard) a refused body, or the client sees a reset, not the 400."""
+    base, *_ = server
+    for _ in range(3):
+        status, body = upload(base, name="notes.txt", data=b"\x00" * (8 * 1024 * 1024))
+        assert status == 400
+        assert ".mp4" in body["error"]
+
+
+def test_an_upload_while_busy_gets_409_not_a_reset(server):
+    base, _, runner, gate = server
+    _, uploaded = upload(base)
+    gate.clear()
+    assert start(base, run=uploaded["run"], profile="podcast")[0] == 202
+    status, body = upload(base, name="other.mp4", data=b"\x00" * (8 * 1024 * 1024))
+    assert status == 409
+    assert "running" in body["error"]
+    gate.set()
