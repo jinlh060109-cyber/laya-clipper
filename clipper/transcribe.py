@@ -76,7 +76,9 @@ def _faster_whisper_asr(audio, model: str, device: str) -> dict:
 
     compute_type = "float16" if device == "cuda" else "int8"
     asr = whisperx.load_model(model, device, compute_type=compute_type)
-    return asr.transcribe(audio, batch_size=16)
+    result = asr.transcribe(audio, batch_size=16)
+    del asr  # see _free_device_memory
+    return result
 
 
 def _transformers_asr(audio, model: str, device: str, batch_size: int = 8) -> dict:
@@ -116,14 +118,44 @@ def _transformers_asr(audio, model: str, device: str, batch_size: int = 8) -> di
             ids = whisper.generate(features(pieces), task="transcribe", language=language,
                                    cache_implementation="static", disable_compile=True)
             texts += processor.batch_decode(ids, skip_special_tokens=True)
+    del whisper, vad  # see _free_device_memory
     return {"segments": segments_from_chunks(chunks, texts), "language": language}
+
+
+def _free_device_memory(device: str) -> None:
+    """Hand cached GPU memory back to the driver. On an integrated GPU (Intel
+    Arc) that memory is system RAM, and Laya needs it for scoring next.
+
+    Only unreferenced models can be freed, and returning is not enough: a
+    library that catches a failed import (torchcodec, here) keeps its
+    traceback, and with it every frame below, locals included. So the stages
+    `del` their models explicitly."""
+    if device == "cpu":
+        return
+    import gc
+
+    import torch
+
+    gc.collect()
+    backend = getattr(torch, device, None)
+    if backend is not None and hasattr(backend, "empty_cache"):
+        backend.empty_cache()
 
 
 def transcribe(wav: Path, run: Run, model: str = "large-v3",
                device: str | None = None, hf_token: str | None = None) -> dict:
+    device = resolve_device(device)
+    try:
+        # The models live in _transcribe's frame, so they are unreferenced here.
+        return _transcribe(wav, run, model, device, hf_token)
+    finally:
+        _free_device_memory(device)
+
+
+def _transcribe(wav: Path, run: Run, model: str, device: str,
+                hf_token: str | None) -> dict:
     import whisperx
 
-    device = resolve_device(device)
     audio = whisperx.load_audio(str(wav))
     # faster-whisper (CTranslate2) runs on CUDA or CPU only.
     asr = _faster_whisper_asr if device in ("cuda", "cpu") else _transformers_asr
@@ -147,6 +179,7 @@ def transcribe(wav: Path, run: Run, model: str = "large-v3",
         else:
             result = whisperx.align(result["segments"], align_model, metadata,
                                     audio, device, return_char_alignments=False)
+            del align_model  # see _free_device_memory
 
     # The caller decides: None means "do not diarize" (--no-diarize, the web
     # toggle), so there is deliberately no fallback to $HF_TOKEN here.
@@ -155,6 +188,7 @@ def transcribe(wav: Path, run: Run, model: str = "large-v3",
         from whisperx.diarize import DiarizationPipeline
         pipeline = DiarizationPipeline(use_auth_token=hf_token, device=device)
         result = whisperx.assign_word_speakers(pipeline(audio), result)
+        del pipeline  # see _free_device_memory
         diarized = True
     else:
         print("Diarization off (no HF_TOKEN, or switched off). All speech labelled SPEAKER_00.")

@@ -230,6 +230,7 @@ def test_speech_recognition_runs_on_the_chosen_device(tmp_path, monkeypatch, dev
     monkeypatch.setattr(t, "_faster_whisper_asr", fake("faster-whisper"))
     monkeypatch.setattr(t, "_transformers_asr", fake("transformers"))
     monkeypatch.setattr(t, "resolve_device", lambda requested=None: requested)
+    monkeypatch.setattr(t, "_free_device_memory", lambda dev: None)
     run = Run.create(tmp_path, "r")
     out = t.transcribe(tmp_path / "a.wav", run, model="small", device=device)
     assert calls == [(backend, "small", device)]
@@ -243,6 +244,7 @@ def test_no_device_given_means_auto(tmp_path, monkeypatch):
     _stub_whisperx(monkeypatch)
     seen = []
     monkeypatch.setattr(t, "resolve_device", lambda requested=None: seen.append(requested) or "xpu")
+    monkeypatch.setattr(t, "_free_device_memory", lambda dev: None)
     monkeypatch.setattr(t, "_transformers_asr",
                         lambda audio, model, dev: {"segments": [], "language": "en"})
     t.transcribe(tmp_path / "a.wav", Run.create(tmp_path, "r"), model="small")
@@ -262,3 +264,35 @@ def test_chunks_where_whisper_heard_nothing_are_dropped():
     chunks = [{"start": 0.0, "end": 5.0}, {"start": 6.0, "end": 9.0}]
     assert segments_from_chunks(chunks, ["  ", " yes"]) == [
         {"start": 6.0, "end": 9.0, "text": " yes"}]
+
+
+def test_gpu_memory_is_handed_back_once_transcription_ends(tmp_path, monkeypatch):
+    """On an integrated GPU, device memory is system RAM. Whisper and the
+    aligner kept ~6 GB after transcribing, so Laya scored while swapping."""
+    import clipper.transcribe as t
+    from clipper.run import Run
+    _stub_whisperx(monkeypatch)
+    events = []
+    monkeypatch.setattr(t, "resolve_device", lambda requested=None: requested)
+    monkeypatch.setattr(t, "_transformers_asr", lambda audio, model, dev: events.append("asr")
+                        or {"segments": [], "language": "en"})
+    monkeypatch.setattr(t, "_free_device_memory", lambda dev: events.append(("free", dev)))
+    t.transcribe(tmp_path / "a.wav", Run.create(tmp_path, "r"), model="small", device="xpu")
+    assert events == ["asr", ("free", "xpu")]
+
+
+def test_gpu_memory_is_handed_back_when_transcription_fails(tmp_path, monkeypatch):
+    import clipper.transcribe as t
+    from clipper.run import Run
+    _stub_whisperx(monkeypatch)
+    freed = []
+    monkeypatch.setattr(t, "resolve_device", lambda requested=None: requested)
+
+    def boom(audio, model, dev):
+        raise RuntimeError("out of memory")
+
+    monkeypatch.setattr(t, "_transformers_asr", boom)
+    monkeypatch.setattr(t, "_free_device_memory", freed.append)
+    with pytest.raises(RuntimeError):
+        t.transcribe(tmp_path / "a.wav", Run.create(tmp_path, "r"), model="small", device="xpu")
+    assert freed == ["xpu"]
