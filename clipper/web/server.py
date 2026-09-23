@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -11,6 +12,8 @@ from clipper.run import Run, default_run_name
 from clipper.web.jobs import JobBusy, JobRunner
 
 CHUNK = 1 << 20
+# Seconds a client may go silent mid-request before its connection is dropped.
+REQUEST_TIMEOUT = 60.0
 PROFILES: list[tuple[str, str]] = [
     ("auto", "Auto (Laya decides)"),
     ("podcast", "Podcast"),
@@ -65,6 +68,8 @@ class App:
         return run.root.name
 
     def start(self, body: dict) -> dict:
+        if not isinstance(body, dict):
+            raise ValueError("Send the settings as a JSON object.")
         name = str(body.get("run") or "")
         run_dir = self.runs_dir / name
         if not name or Path(name).name != name or name in (".", "..") or not run_dir.is_dir():
@@ -107,6 +112,8 @@ class _CountingReader:
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
+        timeout = REQUEST_TIMEOUT
+
         def log_message(self, format, *args):  # noqa: A002 - quiet console
             pass
 
@@ -123,7 +130,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def _length(self) -> int:
             try:
-                return int(self.headers.get("Content-Length") or 0)
+                return max(0, int(self.headers.get("Content-Length") or 0))
             except ValueError:
                 return 0
 
@@ -161,6 +168,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             name = parse_qs(url.query).get("name", [""])[0]
             try:
                 run = app.receive_upload(name, body, self._length())
+            except (ConnectionError, TimeoutError):
+                # The client hung up or went silent; nobody is left to answer.
+                self.close_connection = True
+                return
             except JobBusy as error:
                 self._refuse(409, str(error), body)
                 return
@@ -190,8 +201,16 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address) -> None:
+        # A browser tab closed mid-request is routine, not worth a traceback.
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(runs_dir: Path, port: int = 8765,
                 runner: JobRunner | None = None) -> ThreadingHTTPServer:
     runs_dir.mkdir(parents=True, exist_ok=True)
     app = App(runs_dir, runner or JobRunner())
-    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
+    return _Server(("127.0.0.1", port), make_handler(app))

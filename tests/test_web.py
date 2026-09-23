@@ -1,5 +1,8 @@
 import json
 import os
+import socket
+import struct
+import time
 import threading
 import urllib.error
 import urllib.request
@@ -189,3 +192,70 @@ def test_an_upload_while_busy_gets_409_not_a_reset(server):
     assert status == 409
     assert "running" in body["error"]
     gate.set()
+
+
+def raw(base, request: bytes, timeout=5.0) -> bytes:
+    """Send bytes on a raw socket and return whatever comes back before it closes."""
+    host, port = base.removeprefix("http://").split(":")
+    with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+        sock.sendall(request)
+        chunks = []
+        while True:
+            try:
+                data = sock.recv(65536)
+            except (TimeoutError, ConnectionError):
+                break
+            if not data:
+                break
+            chunks.append(data)
+        return b"".join(chunks)
+
+
+@pytest.mark.parametrize("payload", [b"[1, 2]", b'"podcast"', b"null"])
+def test_a_start_body_that_is_not_an_object_is_refused(server, payload):
+    base, *_ = server
+    status, body = jcall("POST", f"{base}/api/start", payload)
+    assert status == 400
+    assert "object" in body["error"]
+
+
+def test_a_negative_content_length_is_answered_not_left_hanging(server):
+    base, *_ = server
+    started = time.monotonic()
+    reply = raw(base, b"POST /api/start HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n")
+    assert reply.startswith(b"HTTP/1.0 400") or reply.startswith(b"HTTP/1.1 400")
+    assert time.monotonic() - started < 4
+
+
+def test_a_stalled_upload_is_dropped_quietly_and_cleaned_up(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("clipper.web.server.REQUEST_TIMEOUT", 0.5)
+    srv = make_server(tmp_path, port=0, runner=JobRunner(gated_stages(threading.Event())))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        raw(base, b"PUT /api/upload?name=a.mp4 HTTP/1.1\r\nHost: x\r\n"
+                  b"Content-Length: 1000\r\n\r\n" + b"\x00" * 10, timeout=5)
+        deadline = time.monotonic() + 5
+        while list(tmp_path.glob("*/video.*")) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert list(tmp_path.glob("*/video.*")) == []
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_a_client_that_hangs_up_mid_upload_leaves_no_traceback(server, capsys):
+    base, tmp_path, *_ = server
+    host, port = base.removeprefix("http://").split(":")
+    for _ in range(3):
+        with socket.create_connection((host, int(port)), timeout=5) as sock:
+            sock.sendall(b"PUT /api/upload?name=a.mp4 HTTP/1.1\r\nHost: x\r\n"
+                         b"Content-Length: 100000000\r\n\r\n" + b"\x00" * 100000)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    deadline = time.monotonic() + 5
+    while list(tmp_path.glob("*/video.*")) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert list(tmp_path.glob("*/video.*")) == []
+    time.sleep(0.2)
+    assert "Traceback" not in capsys.readouterr().err
