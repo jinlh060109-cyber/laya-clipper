@@ -1,4 +1,3 @@
-import pytest
 from clipper.energy import rolling_baseline
 
 def test_output_length_matches_input():

@@ -98,7 +98,7 @@ def extract_audio(ffmpeg: Path, video: Path, dest: Path) -> None:
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     try:
         result = subprocess.run(
-            [str(ffmpeg), "-hide_banner", "-y", "-i", str(video), "-vn",
+            [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", "-i", str(video), "-vn",
              "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
              # The temp name ends in .tmp, which ffmpeg cannot map to a
              # muxer, so the container has to be named explicitly.

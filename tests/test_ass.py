@@ -1,4 +1,3 @@
-import pytest
 from clipper.captions import (
     Cue, font_size_for_height, format_ass_time, render_ass,
 )
@@ -72,8 +71,8 @@ def test_empty_cue_list_still_produces_a_valid_file():
     assert "[Events]" in out
 
 def test_karaoke_absorbs_pauses_so_highlighting_stays_in_sync():
-    """libass advances \k cumulatively; a pause dropped from the sum drifts early."""
+    r"""libass advances \k cumulatively; a pause dropped from the sum drifts early."""
     words = [{"word": "a", "start": 0.0, "end": 0.3, "score": 0.9, "speaker": "S"},
              {"word": "b", "start": 1.0, "end": 1.4, "score": 0.9, "speaker": "S"}]
     out = render_ass([Cue(start=0.0, end=1.4, words=words, speaker="S")], height=1080)
-    assert "{\k100}a {\k40}b" in out
+    assert r"{\k100}a {\k40}b" in out

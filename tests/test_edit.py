@@ -117,3 +117,11 @@ def test_each_ticked_clip_becomes_a_folder_with_cut_final_and_prompt(tmp_path):
     assert probe.stdout.split()[0] == "1080,1920"
     action = run.clips_dir() / "02-clip-a0"
     assert not (action / "captions.srt").exists()  # nobody speaks: no captions
+
+
+def test_ffmpeg_reports_only_errors_so_the_real_error_is_quoted():
+    """At the default level ffmpeg's closing statistics filled the quoted tail
+    and pushed the actual error out of the message ("Conversion failed!")."""
+    for cmd in (edit.cut_command("ffmpeg", Path("s.mp4"), 0.0, 20.0, Path("c.mp4"), "libx264"),
+                edit.final_command("ffmpeg", Path("s.mp4"), 0.0, 20.0, Path("f.mp4"), None, "libx264")):
+        assert cmd[cmd.index("-loglevel") + 1] == "error"

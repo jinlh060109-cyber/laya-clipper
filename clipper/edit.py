@@ -66,15 +66,19 @@ def _encode(encoder: str) -> list[str]:
             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
 
 
+# Errors only: at the default level ffmpeg's closing statistics fill the last
+# lines of stderr, which is all an error message quotes (see ffmpeg_tail).
+
+
 def cut_command(ffmpeg, source: Path, start: float, end: float, output: Path,
                 encoder: str) -> list[str]:
-    return [str(ffmpeg), "-y", "-accurate_seek", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
+    return [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", "-accurate_seek", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
             "-i", str(source), *_encode(encoder), str(output)]
 
 
 def final_command(ffmpeg, source: Path, start: float, end: float, output: Path,
                   chain: str | None, encoder: str) -> list[str]:
-    cmd = [str(ffmpeg), "-y", "-accurate_seek", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
+    cmd = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", "-accurate_seek", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
            "-i", str(source)]
     if chain:
         cmd += ["-vf", chain]

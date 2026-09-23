@@ -407,3 +407,17 @@ def test_a_fresh_run_accepts_any_video(tmp_path):
     video = tmp_path / "a.mp4"
     video.write_bytes(b"a")
     check_same_source(Run.create(tmp_path, "r"), video)
+
+
+def test_audio_extraction_asks_ffmpeg_for_errors_only(tmp_path, monkeypatch):
+    import subprocess
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        Path(cmd[-1]).write_bytes(b"RIFF")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("clipper.ingest.subprocess.run", fake_run)
+    extract_audio(Path("ffmpeg"), Path("video.mp4"), tmp_path / "audio.wav")
+    assert seen[0][seen[0].index("-loglevel") + 1] == "error"

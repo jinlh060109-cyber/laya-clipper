@@ -8,7 +8,7 @@ from pathlib import Path
 from clipper.agent import AgentError
 from clipper.ai import AIError
 from clipper.device import VALID as DEVICES
-from clipper.hardware import ENCODERS, detect
+from clipper.hardware import detect
 from clipper.ingest import check_same_source, ingest
 from clipper.pipeline import default_steps
 from clipper.preflight import PreflightError, preflight
