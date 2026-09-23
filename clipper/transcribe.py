@@ -38,9 +38,10 @@ def _fill_timings(words: list[dict], seg_start: float, seg_end: float) -> list[d
 def normalize_transcript(result: dict, model: str, diarized: bool, language: str) -> dict:
     segments = result.get("segments") or []
     if not segments:
-        raise ValueError(
-            "Transcription produced no speech. The audio may be silent or music only."
-        )
+        # Gameplay without commentary is a real input, not an error: the
+        # action stage finds its moments from picture and sound instead.
+        return {"language": language, "model": model,
+                "diarized": diarized, "segments": []}
     out_segments = []
     for seg in segments:
         speaker = seg.get("speaker", DEFAULT_SPEAKER)
@@ -75,14 +76,18 @@ def transcribe(wav: Path, run: Run, model: str = "large-v3",
     result = asr.transcribe(audio, batch_size=16)
     language = result["language"]
 
-    align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
-    result = whisperx.align(result["segments"], align_model, metadata,
-                            audio, device, return_char_alignments=False)
+    # Nothing was said (gameplay without commentary): there is nothing to
+    # align or attribute, and whisperx's aligner does not accept an empty list.
+    if result["segments"]:
+        align_model, metadata = whisperx.load_align_model(language_code=language,
+                                                          device=device)
+        result = whisperx.align(result["segments"], align_model, metadata,
+                                audio, device, return_char_alignments=False)
 
     # The caller decides: None means "do not diarize" (--no-diarize, the web
     # toggle), so there is deliberately no fallback to $HF_TOKEN here.
     diarized = False
-    if hf_token:
+    if hf_token and result["segments"]:
         from whisperx.diarize import DiarizationPipeline
         pipeline = DiarizationPipeline(use_auth_token=hf_token, device=device)
         result = whisperx.assign_word_speakers(pipeline(audio), result)

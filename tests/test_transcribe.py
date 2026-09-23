@@ -35,9 +35,9 @@ def test_missing_speaker_defaults_to_speaker_zero():
     assert out["segments"][0]["speaker"] == "SPEAKER_00"
     assert out["segments"][0]["words"][0]["speaker"] == "SPEAKER_00"
 
-def test_empty_segments_raise():
-    with pytest.raises(ValueError, match="no speech"):
-        normalize_transcript({"segments": []}, "large-v3", False, "en")
+def test_no_speech_gives_an_empty_transcript_not_an_error():
+    out = normalize_transcript({"segments": []}, "small", False, "en")
+    assert out == {"language": "en", "model": "small", "diarized": False, "segments": []}
 
 
 def test_two_word_unaligned_run_splits_evenly_without_shrinking_gap():

@@ -175,3 +175,21 @@ def test_a_failed_render_leaves_no_partial_file_and_quotes_ffmpeg_briefly(tmp_pa
     assert not target.exists()
     assert "Invalid argument" in str(info.value)
     assert "Copyright" not in str(info.value)
+
+
+def test_a_clip_with_no_speech_is_rendered_without_burned_subtitles(tmp_path, monkeypatch):
+    from clipper import render
+    from clipper.run import Run
+
+    run = Run.create(tmp_path, "game")
+    run.write_json("source.json", {"path": "C:/src.mp4", "duration": 100.0,
+                                   "video": {"width": 1920, "height": 1080, "rotation": 0}})
+    run.write_json("transcript.json", {"language": "en", "segments": []})
+    run.write_json("plan.json", {"clips": [{"in": 10.0, "out": 30.0, "title": "T"}]})
+    monkeypatch.setattr(render, "preflight",
+                        lambda **k: type("T", (), {"ffmpeg": Path("ffmpeg")})())
+    chains = []
+    monkeypatch.setattr(render, "render_clip",
+                        lambda ffmpeg, source, clip, target, chain, cwd=None: chains.append(chain))
+    render.run_render(run, captions="burn")
+    assert "subtitles" not in (chains[0] or "")

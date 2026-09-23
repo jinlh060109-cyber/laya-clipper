@@ -121,7 +121,8 @@ def run_render(run: Run, vertical: bool = False, captions: str = "burn") -> list
 
         out_height = 1920 if want_vertical else height
         labelled = speakers if clip.get("speaker_label") else None
-        ass = render_ass(cues, out_height, labelled) if mode == "burn" else None
+        # No words in range (gameplay): an empty subtitle track buys nothing.
+        ass = render_ass(cues, out_height, labelled) if mode == "burn" and cues else None
 
         target = out_dir / f"{stem}.mp4"
         if ass is not None:

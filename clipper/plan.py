@@ -71,11 +71,12 @@ def validate_plan(plan: dict, duration: float) -> list[str]:
     """Every problem: the hard errors from `plan_errors`, then softer warnings."""
     errors = plan_errors(plan, duration)
     warnings: list[str] = []
-    if not plan.get("laya_model"):
+    # An explicit null is a video with no speech: Laya never ran, on purpose.
+    if "laya_model" not in plan:
         warnings.append(
             "plan.json has no laya_model; thresholds cannot be traced to a checkpoint."
         )
-    elif not plan["laya_model"].get("confidence_calibrated", True):
+    elif plan["laya_model"] and not plan["laya_model"].get("confidence_calibrated", True):
         buckets = ", ".join(plan["laya_model"].get("uncalibrated_buckets") or [])
         warnings.append(
             f"laya_model reports uncalibrated confidence buckets ({buckets}); "

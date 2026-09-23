@@ -124,3 +124,19 @@ def test_the_returned_summary_reports_counts(run_with_windows, monkeypatch):
     assert summary["scored"] == 4
     assert summary["failed"] == 0
     assert "candidates" in summary
+
+
+def test_zero_windows_skip_laya_and_write_empty_candidates(tmp_path, monkeypatch):
+    import clipper.stages.score as stage
+
+    run = Run.create(tmp_path, "silent")
+    run.write_json("windows.json", {"windows": []})
+    run.write_json("transcript.json", {"language": "en", "segments": []})
+    monkeypatch.setattr(stage, "load_agent",
+                        lambda *a, **k: pytest.fail("Laya must not load for zero windows"))
+    result = run_score(run, "stream")
+    assert result == {"scored": 0, "failed": 0, "candidates": 0,
+                      "uncertain": 0, "device": "none"}
+    candidates = run.read_json("candidates.json")
+    assert candidates["laya_model"] is None
+    assert candidates["candidates"] == [] and candidates["uncertain"] == []

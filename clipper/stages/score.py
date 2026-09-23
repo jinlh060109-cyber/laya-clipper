@@ -22,6 +22,13 @@ def run_score(run: Run, profile_name: str, device: str | None = None,
     windows = run.read_json("windows.json")["windows"]
     language = (run.read_json("transcript.json") or {}).get("language")
 
+    if not windows:
+        # Nothing was said, so there is nothing for Laya to read.
+        empty = {"profile": profile.name, "laya_model": None}
+        run.write_json("scores.json", {**empty, "windows": []})
+        run.write_json("candidates.json", {**empty, "candidates": [], "uncertain": []})
+        return {"scored": 0, "failed": 0, "candidates": 0, "uncertain": 0, "device": "none"}
+
     if agent is None:
         agent_obj, meta = load_agent(language, profile, device=device)
     else:

@@ -98,3 +98,8 @@ def test_soft_warnings_are_not_errors():
     plan = _plan(clip_format="hot_take", out=145.0)
     assert plan_errors(plan, 5400.0) == []
     assert validate_plan(plan, 5400.0)
+
+
+def test_an_explicit_null_laya_model_is_not_warned_about():
+    plan = {"laya_model": None, "clips": [{"in": 0, "out": 20, "title": "t"}]}
+    assert not any("laya_model" in p for p in validate_plan(plan, 100.0))
