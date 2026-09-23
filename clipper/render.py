@@ -84,7 +84,8 @@ def render_clip(ffmpeg: Path, source: Path, clip: dict,
                 cwd: Path | None = None) -> Path:
     """`cwd` is the staged-subtitles directory when the chain names a bare file."""
     result = subprocess.run(build_command(ffmpeg, source, clip, output, filter_chain),
-                            capture_output=True, text=True, check=False, cwd=cwd)
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", check=False, cwd=cwd)
     if result.returncode != 0:
         raise RuntimeError(f"Render failed for {output.name}:\n{result.stderr[-2000:]}")
     return output

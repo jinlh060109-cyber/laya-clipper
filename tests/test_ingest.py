@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -303,3 +304,44 @@ def test_ingest_writes_source_json_through_run_write_json(tmp_path, monkeypatch)
     assert on_disk == result
     assert not run.path("source.json.tmp").exists()
     assert run.path("audio.wav").read_bytes() == b"fake-wav-bytes"
+
+
+def test_extract_audio_with_real_ffmpeg_writes_a_wav(tmp_path):
+    """The temp name ends in .tmp, so ffmpeg must be told the format."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("ffmpeg not on PATH")
+    video = tmp_path / "tone.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=size=64x64:duration=1",
+                    "-f", "lavfi", "-i", "sine=duration=1", "-shortest",
+                    "-c:v", "libx264", "-c:a", "aac", str(video)], check=True)
+    dest = tmp_path / "audio.wav"
+    extract_audio(Path(ffmpeg), video, dest)
+    assert dest.read_bytes()[:4] == b"RIFF"
+    assert not dest.with_suffix(".wav.tmp").exists()
+
+
+def test_extract_audio_failure_reports_ffmpeg_tail_not_its_banner(tmp_path, monkeypatch):
+    banner = "ffmpeg version 9 Copyright\n" + "  --enable-thing\n" * 200
+    monkeypatch.setattr("clipper.ingest.subprocess.run",
+                        _fake_run_returning(1, stderr=banner + "video.mp4: Invalid data found\n"))
+    with pytest.raises(RuntimeError) as info:
+        extract_audio(Path("ffmpeg"), Path("video.mp4"), tmp_path / "audio.wav")
+    message = str(info.value)
+    assert "Invalid data found" in message
+    assert "Copyright" not in message
+    assert len(message) < 1000
+
+
+def test_ffmpeg_output_with_non_ascii_metadata_is_decoded_as_utf8(tmp_path):
+    """ffmpeg writes UTF-8; a non-UTF-8 locale (cp936 here) must not break parsing."""
+    ffmpeg, ffprobe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if ffmpeg is None or ffprobe is None:
+        pytest.skip("ffmpeg not on PATH")
+    video = tmp_path / "titled.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "color=size=64x64:duration=2",
+                    "-f", "lavfi", "-i", "sine=duration=2", "-shortest", "-c:v", "libx264",
+                    "-c:a", "aac", "-metadata", "title=naïve — “quoted” ü 🎮", str(video)],
+                   check=True)
+    assert probe_source(Path(ffprobe), video)["duration"] > 1
+    assert len(per_second_rms(Path(ffmpeg), video, 2.0)) == 2

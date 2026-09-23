@@ -9,6 +9,16 @@ from clipper.energy import rolling_baseline
 from clipper.run import Run
 
 
+def ffmpeg_tail(stderr: str, lines: int = 8) -> str:
+    """The last lines of ffmpeg's stderr, where the actual error is.
+
+    ffmpeg opens with a long version and build banner; quoting all of it
+    buries the one line that says what went wrong.
+    """
+    kept = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
+    return "\n".join(kept[-lines:])[-800:]
+
+
 def _fps(rate: str) -> float:
     if "/" in rate:
         num, den = rate.split("/", 1)
@@ -69,10 +79,10 @@ def probe_source(ffprobe: Path, video: Path) -> dict:
     result = subprocess.run(
         [str(ffprobe), "-v", "error", "-print_format", "json",
          "-show_format", "-show_streams", str(video)],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed on {video}:\n{result.stderr}")
+        raise RuntimeError(f"ffprobe failed on {video}:\n{ffmpeg_tail(result.stderr)}")
     return parse_probe(json.loads(result.stdout), video)
 
 
@@ -88,12 +98,15 @@ def extract_audio(ffmpeg: Path, video: Path, dest: Path) -> None:
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     try:
         result = subprocess.run(
-            [str(ffmpeg), "-y", "-i", str(video), "-vn",
-             "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(tmp)],
-            capture_output=True, text=True, check=False,
+            [str(ffmpeg), "-hide_banner", "-y", "-i", str(video), "-vn",
+             "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+             # The temp name ends in .tmp, which ffmpeg cannot map to a
+             # muxer, so the container has to be named explicitly.
+             "-f", "wav", str(tmp)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Audio extraction failed:\n{result.stderr}")
+            raise RuntimeError(f"Audio extraction failed:\n{ffmpeg_tail(result.stderr)}")
         os.replace(tmp, dest)
     finally:
         tmp.unlink(missing_ok=True)
@@ -105,10 +118,10 @@ def per_second_rms(ffmpeg: Path, wav: Path, duration: float) -> list[float]:
         [str(ffmpeg), "-v", "info", "-i", str(wav),
          "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
          "-f", "null", "-"],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"RMS extraction failed on {wav}:\n{result.stderr}")
+        raise RuntimeError(f"RMS extraction failed on {wav}:\n{ffmpeg_tail(result.stderr)}")
     levels: list[float] = []
     for line in (result.stderr + result.stdout).splitlines():
         if "RMS_level=" in line:

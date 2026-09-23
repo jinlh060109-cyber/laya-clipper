@@ -53,6 +53,8 @@ def _run_filters(ffmpeg: Path) -> str:
         [str(ffmpeg), "-hide_banner", "-filters"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     output = result.stdout + result.stderr
