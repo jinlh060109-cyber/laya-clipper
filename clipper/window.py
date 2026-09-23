@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+from clipper.captions import join_words
+
 
 def _flatten(transcript: dict) -> list[dict]:
     words: list[dict] = []
@@ -18,12 +20,12 @@ def _render(words: list[dict]) -> str:
     for word in words:
         if word["speaker"] != current:
             if buffer:
-                lines.append(f"{current}: {' '.join(buffer)}")
+                lines.append(f"{current}: {join_words(buffer)}")
             current = word["speaker"]
             buffer = []
         buffer.append(word["word"])
     if buffer:
-        lines.append(f"{current}: {' '.join(buffer)}")
+        lines.append(f"{current}: {join_words(buffer)}")
     return "\n".join(lines)
 
 

@@ -136,3 +136,13 @@ def test_energy_degenerate_short_window_falls_back_without_raising():
     first = w[0]
     assert first["energy_peak"] == pytest.approx(0.9)
     assert first["energy_peak_offset"] == pytest.approx(0.5)
+
+
+def test_window_text_joins_cjk_without_spaces():
+    words = [{"word": ch, "start": i * 0.3, "end": i * 0.3 + 0.25, "score": 0.9,
+              "speaker": "SPEAKER_00"} for i, ch in enumerate("今天我们聊一聊露营" * 20)]
+    transcript = {"language": "zh", "model": "m", "diarized": False,
+                  "segments": [{"start": 0.0, "end": words[-1]["end"], "speaker": "SPEAKER_00",
+                                "text": "", "words": words}]}
+    windows = build_windows(transcript, [0.5] * 60, 60.0)
+    assert "今天我们聊一聊露营" in windows[0]["text"]

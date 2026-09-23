@@ -3,6 +3,38 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+def _unspaced(ch: str) -> bool:
+    """Scripts written without spaces between words: CJK ideographs, kana,
+    and fullwidth punctuation. Hangul is excluded; Korean spaces its words."""
+    code = ord(ch)
+    return (0x3000 <= code <= 0x30FF      # CJK punctuation, hiragana, katakana
+            or 0x3400 <= code <= 0x4DBF   # CJK extension A
+            or 0x4E00 <= code <= 0x9FFF   # CJK unified ideographs
+            or 0xF900 <= code <= 0xFAFF   # CJK compatibility ideographs
+            or 0xFF00 <= code <= 0xFFEF)  # fullwidth forms
+
+
+def join_words(words: list[str]) -> str:
+    """Join word tokens, with no space where both neighbours are CJK.
+
+    WhisperX aligns Chinese and Japanese per character, so a plain
+    " ".join would print "我 是 谁" instead of "我是谁".
+    """
+    out = ""
+    for word in (w.strip() for w in words):
+        if not word:
+            continue
+        if out and not (_unspaced(out[-1]) and _unspaced(word[0])):
+            out += " "
+        out += word
+    return out
+
+
+def display_width(text: str) -> int:
+    """Width in Latin-character units; a CJK glyph is about two wide."""
+    return sum(2 if _unspaced(ch) else 1 for ch in text)
+
+
 @dataclass(frozen=True)
 class Cue:
     start: float
@@ -12,7 +44,7 @@ class Cue:
 
     @property
     def text(self) -> str:
-        return " ".join(w["word"].strip() for w in self.words)
+        return join_words([w["word"] for w in self.words])
 
 
 def words_in_range(transcript: dict, start: float, end: float) -> list[dict]:
@@ -37,7 +69,7 @@ def build_cues(words: list[dict], max_chars: int = 42,
 
     for word in words:
         if buffer:
-            too_long = len(" ".join(w["word"].strip() for w in buffer + [word])) > max_chars
+            too_long = display_width(join_words([w["word"] for w in buffer + [word]])) > max_chars
             too_slow = word["end"] - buffer[0]["start"] > max_seconds
             changed = word["speaker"] != buffer[0]["speaker"]
             if too_long or too_slow or changed:
@@ -124,12 +156,18 @@ def _escape(text: str) -> str:
 def _karaoke(cue: Cue) -> str:
     # \k durations are cumulative from the line start, so each word holds until
     # the next begins; using word length alone drifts early after every pause.
-    parts: list[str] = []
+    line, previous = "", ""
     for i, word in enumerate(cue.words):
         until = cue.words[i + 1]["start"] if i + 1 < len(cue.words) else word["end"]
         centis = max(1, int(round((until - word["start"]) * 100)))
-        parts.append(f"{{\\k{centis}}}{_escape(word['word'].strip())}")
-    return " ".join(parts)
+        text = word["word"].strip()
+        if not text:
+            continue
+        if previous and not (_unspaced(previous[-1]) and _unspaced(text[0])):
+            line += " "
+        line += f"{{\\k{centis}}}{_escape(text)}"
+        previous = text
+    return line
 
 
 def render_ass(cues: list[Cue], height: int,
