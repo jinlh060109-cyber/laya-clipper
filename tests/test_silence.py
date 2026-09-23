@@ -1,4 +1,4 @@
-from clipper.silence import silent_spans
+from clipper.silence import silent_spans, speech_only
 
 
 def words(*spans):
@@ -59,12 +59,30 @@ def test_sparse_utterances_do_not_count_as_speech():
     assert silent_spans(t, 130.0) == [[10.0, 120.0]]
 
 
-def test_utterances_whose_words_never_aligned_do_not_count_as_speech():
+def test_the_real_runs_invented_sentence_does_not_count_as_speech():
     """6 invented words over 11 s, timings only interpolated (score 0.0)."""
+    invented = [(69.0 + k * 11 / 6, 69.0 + (k + 1) * 11 / 6) for k in range(6)]
     t = {"segments": [{"words": scored(*talk(0, 10))},
-                      {"words": scored(*talk(69, 80, step=1.0), score=0.0)},
+                      {"words": scored(*invented, score=0.0)},
                       {"words": scored(*talk(120, 130))}]}
     assert silent_spans(t, 130.0) == [[10.0, 120.0]]
+
+
+def test_dense_speech_in_a_language_without_an_aligner_still_counts():
+    """No aligner means every word scores 0.0; it is still someone talking."""
+    t = {"segments": [{"words": scored(*talk(0, 10))},
+                      {"words": scored(*talk(60, 70), score=0.0)},
+                      {"words": scored(*talk(120, 130))}]}
+    assert silent_spans(t, 130.0) == [[10.0, 60.0], [70.0, 120.0]]
+
+
+def test_speech_only_keeps_real_talk_and_drops_the_rest():
+    t = {"segments": [{"words": scored(*talk(0, 10))},
+                      {"words": scored((40.0, 69.0))}]}
+    kept = speech_only(t)
+    assert [w["start"] for s in kept["segments"] for w in s["words"]] == [
+        w["start"] for w in scored(*talk(0, 10))]
+    assert t["segments"][1]["words"]  # the input is not modified
 
 
 def test_dense_aligned_speech_still_counts():

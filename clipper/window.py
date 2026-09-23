@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 from clipper.captions import join_words
+from clipper.silence import speech_only
 
 
 def _flatten(transcript: dict) -> list[dict]:
@@ -119,7 +120,9 @@ def write_windows(run) -> list[dict]:
     The one code path for this stage; the CLI and the web runner both call it.
     """
     source = run.read_json("source.json")
-    windows = build_windows(run.read_json("transcript.json"), source["energy"],
+    # Only real talk goes to Laya. What Whisper invents over game audio would
+    # otherwise be scored, and could even switch Laya to another language.
+    windows = build_windows(speech_only(run.read_json("transcript.json")), source["energy"],
                             duration=source["duration"])
     run.write_json("windows.json", {"windows": windows})
     return windows

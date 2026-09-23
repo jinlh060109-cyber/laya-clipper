@@ -146,3 +146,19 @@ def test_window_text_joins_cjk_without_spaces():
                                 "text": "", "words": words}]}
     windows = build_windows(transcript, [0.5] * 60, 60.0)
     assert "今天我们聊一聊露营" in windows[0]["text"]
+
+
+def test_the_windows_stage_ignores_what_is_not_really_speech(tmp_path):
+    """Whisper's inventions over game audio (the real run) must not reach Laya."""
+    from clipper.run import Run
+    from clipper.window import write_windows
+
+    run = Run.create(tmp_path, "game")
+    run.write_json("source.json", {"duration": 160.0, "energy": [0.5] * 160})
+    words = [{"word": "dd-d-d-d-d-d", "start": 40.0, "end": 69.0, "score": 0.0,
+              "speaker": "SPEAKER_00"}]
+    words += [{"word": "meddwl", "start": 69.0 + k * 11 / 6, "end": 69.0 + (k + 1) * 11 / 6,
+               "score": 0.0, "speaker": "SPEAKER_00"} for k in range(6)]
+    run.write_json("transcript.json", {"language": "cy", "segments": [
+        {"start": 40.0, "end": 80.0, "speaker": "SPEAKER_00", "text": "", "words": words}]})
+    assert write_windows(run) == []
