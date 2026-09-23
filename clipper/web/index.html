@@ -176,8 +176,10 @@ async function start() {
   $("start").disabled = true;
   buildStages();
   setStage("upload", "running", "0%");
+  let uploaded = false;
   try {
     const run = await upload(file);
+    uploaded = true;
     setStage("upload", "done");
     const response = await fetch("/api/start", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -187,7 +189,7 @@ async function start() {
     if (!response.ok) throw new Error(body.error || "Could not start.");
     render(body); poll();
   } catch (error) {
-    setStage("upload", "failed");
+    if (!uploaded) setStage("upload", "failed");
     showError(error.message);
     $("start").disabled = false;
   }
