@@ -13,6 +13,7 @@ from clipper.preflight import PreflightError, preflight
 from clipper.profiles.loader import ProfileError
 from clipper.render import run_render
 from clipper.run import MissingArtifact, Run, default_run_name
+from clipper.stages.action import run_action
 from clipper.stages.score import run_score
 from clipper.transcribe import transcribe
 from clipper.window import write_windows
@@ -47,6 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     p = sub.add_parser("transcribe"); p.add_argument("run")
     p.add_argument("--model", default="large-v3"); p.add_argument("--no-diarize", action="store_true")
     p = sub.add_parser("window"); p.add_argument("run")
+    p = sub.add_parser("action"); p.add_argument("run")
     p = sub.add_parser("score"); p.add_argument("run")
     p.add_argument("--profile", required=True)
     p.add_argument("--device", default=None, choices=DEVICES, help=DEVICE_HELP)
@@ -77,11 +79,25 @@ def _ingest_and_transcribe(video: Path, name: str | None, model: str,
     return run
 
 
-def _print_progress(done: int, total: int) -> None:
-    """One stderr line, rewritten in place, at most every 1% of the windows."""
-    if done == total or done % max(1, total // 100) == 0:
-        end = "\n" if done == total else ""
-        print(f"\rScoring windows: {done}/{total}", end=end, file=sys.stderr, flush=True)
+def _printer(label: str):
+    """One stderr line, rewritten in place, at most every 1% of the work."""
+    def show(done: int, total: int) -> None:
+        if done == total or done % max(1, total // 100) == 0:
+            end = "\n" if done == total else ""
+            print(f"\r{label}: {done}/{total}", end=end, file=sys.stderr, flush=True)
+    return show
+
+
+_print_progress = _printer("Scoring windows")
+_print_motion = _printer("Measuring motion (s)")
+
+
+def _report_action(result: dict) -> None:
+    if not result["spans"]:
+        print("No stretch of 8 s or more without speech; no action moments.")
+    else:
+        print(f"{result['candidates']} action moments from "
+              f"{result['silent_seconds'] / 60:.1f} min without speech")
 
 
 def _report_score(result: dict) -> None:
@@ -137,6 +153,10 @@ def main(argv: list[str] | None = None) -> int:
             run = Run.open(Path(args.run))
             print(f"{len(write_windows(run))} windows")
 
+        elif args.command == "action":
+            run = Run.open(Path(args.run))
+            _report_action(run_action(run, progress=_print_motion))
+
         elif args.command == "score":
             run = Run.open(Path(args.run))
             _report_score(run_score(run, args.profile, device=args.device,
@@ -169,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
             run = _ingest_and_transcribe(video, args.run, args.model)
             if not run.exists("windows.json"):
                 write_windows(run)
+            _report_action(run_action(run, progress=_print_motion))
             _report_score(run_score(run, args.profile, device=args.device,
                                     progress=_print_progress))
             print(f"Artifacts in {run.root}.")

@@ -86,15 +86,22 @@ def test_all_builds_windows_before_scoring(tmp_path, monkeypatch):
     run.write_json("transcript.json", {"language": "en", "segments": [
         {"start": 0.0, "end": 40.0, "speaker": "SPEAKER_00", "text": "x", "words": words}]})
     monkeypatch.setattr("clipper.cli._ingest_and_transcribe", lambda *a, **k: run)
-    scored = {}
+    order = []
+
+    def fake_action(r, progress=None):
+        assert r.exists("windows.json")
+        order.append("action")
+        return ACTION
 
     def fake_score(r, profile_name, device=None, agent=None, progress=None):
-        scored["windows"] = r.read_json("windows.json")["windows"]
+        assert r.read_json("windows.json")["windows"]
+        order.append("score")
         return SUMMARY
 
+    monkeypatch.setattr("clipper.cli.run_action", fake_action)
     monkeypatch.setattr("clipper.cli.run_score", fake_score)
     assert main(["all", "video.mp4", "--profile", "podcast"]) == 0
-    assert scored["windows"]
+    assert order == ["action", "score"]
 
 
 def test_web_serves_until_interrupted_and_prints_its_url(capsys, monkeypatch):
@@ -209,3 +216,23 @@ def test_all_does_not_accept_vertical_because_it_never_renders():
     with pytest.raises(SystemExit) as exit_info:
         main(["all", "video.mp4", "--profile", "podcast", "--vertical"])
     assert exit_info.value.code == 2
+
+
+ACTION = {"silent_seconds": 600.0, "spans": 3, "candidates": 7}
+
+
+def test_action_prints_what_it_found(tmp_path, monkeypatch, capsys):
+    from clipper.run import Run
+    run = Run.create(tmp_path, "g")
+    monkeypatch.setattr("clipper.cli.run_action", lambda r, progress=None: ACTION)
+    assert main(["action", str(run.root)]) == 0
+    assert "7 action moments from 10.0 min without speech" in capsys.readouterr().out
+
+
+def test_action_says_so_when_there_is_no_silence(tmp_path, monkeypatch, capsys):
+    from clipper.run import Run
+    run = Run.create(tmp_path, "g")
+    monkeypatch.setattr("clipper.cli.run_action", lambda r, progress=None:
+                        {"silent_seconds": 0.0, "spans": 0, "candidates": 0})
+    assert main(["action", str(run.root)]) == 0
+    assert "No stretch of 8 s or more without speech" in capsys.readouterr().out
