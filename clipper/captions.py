@@ -58,14 +58,22 @@ def words_in_range(transcript: dict, start: float, end: float) -> list[dict]:
 
 def build_cues(words: list[dict], max_chars: int = 42,
                max_seconds: float = 3.0) -> list[Cue]:
+    """Group words into caption lines that read as phrases.
+
+    A line ends at a sentence end, or after a comma once it is half full, and
+    otherwise where the length or time limit forces it. A forced break never
+    strands a number at the end of a line ("... and 67.9" / "hours ..."): the
+    number moves to the next line with the word it belongs to.
+    """
     cues: list[Cue] = []
     buffer: list[dict] = []
 
-    def flush() -> None:
-        if buffer:
-            cues.append(Cue(start=buffer[0]["start"], end=buffer[-1]["end"],
-                            words=list(buffer), speaker=buffer[0]["speaker"]))
-            buffer.clear()
+    def flush(upto: int | None = None) -> None:
+        taken = buffer[:upto] if upto is not None else list(buffer)
+        if taken:
+            cues.append(Cue(start=taken[0]["start"], end=taken[-1]["end"],
+                            words=taken, speaker=taken[0]["speaker"]))
+        del buffer[:len(taken)]
 
     for word in words:
         if buffer:
@@ -73,9 +81,19 @@ def build_cues(words: list[dict], max_chars: int = 42,
             too_long = display_width(text) > max_chars
             too_slow = word["end"] - buffer[0]["start"] > max_seconds
             changed = word["speaker"] != buffer[0]["speaker"]
-            if too_long or too_slow or changed:
+            if changed:
                 flush()
+            elif too_long or too_slow:
+                last = buffer[-1]["word"].strip()
+                strand = len(buffer) > 1 and last[:1].isdigit()
+                flush(-1 if strand else None)
         buffer.append(word)
+        token = word["word"].strip()
+        if token.endswith((".", "?", "!", "。", "？", "！")):
+            flush()
+        elif token.endswith((",", ";", ":", "，")) and \
+                display_width(join_words([w["word"] for w in buffer])) >= max_chars / 2:
+            flush()
     flush()
     return cues
 
@@ -154,7 +172,7 @@ def _escape(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def _karaoke(cue: Cue) -> str:
+def _karaoke(cue: Cue, uppercase: bool = False) -> str:
     # \k durations are cumulative from the line start, so each word holds until
     # the next begins; using word length alone drifts early after every pause.
     line, previous = "", ""
@@ -162,6 +180,8 @@ def _karaoke(cue: Cue) -> str:
         until = cue.words[i + 1]["start"] if i + 1 < len(cue.words) else word["end"]
         centis = max(1, int(round((until - word["start"]) * 100)))
         text = word["word"].strip()
+        if uppercase:
+            text = text.upper()
         if not text:
             continue
         if previous and not (_unspaced(previous[-1]) and _unspaced(text[0])):
@@ -172,21 +192,25 @@ def _karaoke(cue: Cue) -> str:
 
 
 def render_ass(cues: list[Cue], height: int,
-               speakers: dict[str, str] | None = None) -> str:
+               speakers: dict[str, str] | None = None,
+               uppercase: bool = False, layout: str = "crop") -> str:
+    """`layout="fit"` on a vertical render puts the captions just under the
+    picture, which then sits in the middle of the frame."""
     size = font_size_for_height(height)
+    under_picture = layout == "fit" and height >= 1920
     header = ASS_HEADER.format(
         play_x=int(height * 9 / 16) if height >= 1920 else int(height * 16 / 9),
         play_y=height,
         size=size,
         outline=max(1, size // 10),
-        margin=int(height * 0.08),
+        margin=int(height * (0.27 if under_picture else 0.08)),
         speaker_size=max(14, int(size * 0.7)),
         speaker_margin=int(height * 0.04),
     )
     lines: list[str] = []
     for cue in cues:
         start, end = format_ass_time(cue.start), format_ass_time(cue.end)
-        lines.append(f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{_karaoke(cue)}")
+        lines.append(f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{_karaoke(cue, uppercase)}")
         name = (speakers or {}).get(cue.speaker)
         if name:
             lines.append(

@@ -50,3 +50,32 @@ def test_subtitles_expression_rejects_a_path_with_spaces():
     """ffmpeg truncates such paths at the first space. Stage to a temp dir."""
     with pytest.raises(ValueError, match="space"):
         subtitles_expression(Path("C:/Users/Linhao Jin/c.ass"))
+
+
+def test_fit_layout_keeps_the_whole_frame_over_a_blurred_copy():
+    from clipper.filters import build_filter_chain
+    chain = build_filter_chain(1920, 1080, True, None, layout="fit")
+    assert "split=2" in chain and "boxblur" in chain
+    assert "overlay=(W-w)/2:(H-h)/2" in chain
+    assert "crop=607" not in chain  # the picture itself is never cropped
+
+
+def test_fit_layout_burns_captions_after_the_overlay():
+    from pathlib import Path
+    from clipper.filters import build_filter_chain
+    chain = build_filter_chain(1920, 1080, True, Path("sub.ass"), layout="fit")
+    assert chain.endswith("subtitles=sub.ass")
+    assert chain.index("overlay") < chain.index("subtitles")
+
+
+def test_fit_layout_on_a_horizontal_render_is_just_captions():
+    from pathlib import Path
+    from clipper.filters import build_filter_chain
+    assert build_filter_chain(1920, 1080, False, Path("s.ass"), layout="fit") == "subtitles=s.ass"
+
+
+def test_unknown_layout_is_rejected():
+    import pytest
+    from clipper.filters import build_filter_chain
+    with pytest.raises(ValueError, match="layout"):
+        build_filter_chain(1920, 1080, True, None, layout="zoom")

@@ -96,3 +96,44 @@ def test_cjk_karaoke_has_no_spaces_between_characters():
     ass = render_ass(build_cues(_tokens("我", "是", "谁")), 1920)
     line = next(l for l in ass.splitlines() if l.startswith("Dialogue"))
     assert "我{" in line and " {" not in line.split(",,", 1)[1]
+
+
+def _spoken(text, start=0.0, step=0.3):
+    return [{"word": w, "start": start + i * step, "end": start + i * step + 0.25,
+             "score": 0.9, "speaker": "SPEAKER_00"} for i, w in enumerate(text.split())]
+
+
+def test_a_cue_ends_at_a_sentence_end_rather_than_running_on():
+    cues = build_cues(_spoken("You need 97.2 hours. Obviously boosts help a lot."))
+    assert cues[0].text == "You need 97.2 hours."
+
+
+def test_a_number_is_never_left_at_the_end_of_a_cue():
+    """The real clip read "between 97.2 hours and 67.9" / "hours to complete it"."""
+    # The 3-second limit falls right after the tenth word, "67.9".
+    words = _spoken("you need between 97.2 hours and about sixty or 67.9 "
+                    "hours to complete it depending on boosts.")
+    assert words[9]["word"] == "67.9"
+    cues = build_cues(words, max_chars=500)
+    assert [c.text for c in cues if c.text.split()[-1][0].isdigit()] == []
+    assert " ".join(c.text for c in cues) == " ".join(w["word"] for w in words)
+
+
+def test_long_sentences_prefer_breaking_after_a_comma():
+    cues = build_cues(_spoken("So if you wanted to finish fast, you could grind for six days straight"),
+                      max_chars=42)
+    assert cues[0].text.endswith("fast,")
+
+
+def test_uppercase_caption_style():
+    from clipper.captions import render_ass
+    ass = render_ass(build_cues(_spoken("Hello there friend.")), 1920, uppercase=True)
+    assert "HELLO" in ass and "Hello" not in ass
+
+
+def test_fit_layout_puts_captions_under_the_picture():
+    import re
+    from clipper.captions import render_ass
+    cues = build_cues(_spoken("Hello there friend."))
+    margin = lambda ass: int(re.search(r"Style: Caption,(?:[^,]*,){20}(\d+)", ass).group(1))
+    assert margin(render_ass(cues, 1920, layout="fit")) > margin(render_ass(cues, 1920))

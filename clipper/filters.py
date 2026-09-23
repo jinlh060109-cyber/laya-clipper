@@ -33,11 +33,28 @@ def subtitles_expression(path: Path) -> str:
     return "subtitles=" + text.replace(":", r"\:")
 
 
+LAYOUTS = ("fit", "crop")
+
+
+def fit_expression() -> str:
+    """The whole frame, scaled to the output width, centred over a blurred and
+    zoomed copy of itself: nothing on screen is lost to a crop."""
+    return (f"split=2[bg][fg];"
+            f"[bg]scale={VERTICAL_W}:{VERTICAL_H}:force_original_aspect_ratio=increase,"
+            f"crop={VERTICAL_W}:{VERTICAL_H},boxblur=20:2[bgb];"
+            f"[fg]scale={VERTICAL_W}:-2[fgs];"
+            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2")
+
+
 def build_filter_chain(width: int, height: int, vertical: bool,
                        subtitle_path: Path | None,
-                       crop_x: str | int = "center") -> str | None:
+                       crop_x: str | int = "center", layout: str = "crop") -> str | None:
+    if layout not in LAYOUTS:
+        raise ValueError(f"Unknown layout {layout!r}. Valid: {', '.join(LAYOUTS)}.")
     parts: list[str] = []
-    if vertical:
+    if vertical and layout == "fit" and int(height * 9 / 16) < width:
+        parts.append(fit_expression())
+    elif vertical:
         crop = crop_expression(width, height, crop_x)
         if crop:
             parts.append(crop)
