@@ -367,3 +367,10 @@ def test_a_client_that_hangs_up_mid_upload_leaves_no_traceback(server, capsys):
         assert wait_until(lambda: not list(tmp_path.glob("*/video.*")))
     time.sleep(0.2)
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_a_refused_make_leaves_the_saved_style_alone(server):
+    base, tmp_path, runner, _ = server
+    run = _analyzed(base, runner)
+    make(base, run=run, choices=[{"id": "c9", "include": True}], style={"notes": "Changed."})
+    assert not (tmp_path / "style.json").exists()

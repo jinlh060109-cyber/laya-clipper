@@ -83,3 +83,11 @@ def test_amd_on_rocm_is_labelled_as_amd():
                                  "mps": _gpu(None)}, rocm=True, encoders=[])
     cuda = next(d for d in info["devices"] if d["id"] == "cuda")
     assert cuda["label"] == "AMD GPU (ROCm)" and cuda["available"]
+
+
+def test_detect_probes_the_ffmpeg_the_app_uses(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(hardware, "find_binary", lambda name, env: tmp_path / "my-ffmpeg")
+    monkeypatch.setattr(hardware, "probe_encoders", lambda ffmpeg: seen.append(ffmpeg) or [])
+    hardware.detect(gpus={"cuda": _gpu(None), "xpu": _gpu(None), "mps": _gpu(None)}, rocm=False)
+    assert seen == [str(tmp_path / "my-ffmpeg")]

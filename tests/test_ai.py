@@ -159,3 +159,29 @@ def test_openai_compatible_requests_stay_within_common_output_limits(monkeypatch
     config = ai.AIConfig("deepseek", "deepseek-chat", "k", "https://api.deepseek.com/v1")
     ai.complete_json(config, "s", "u", SCHEMA, 64000)
     assert sent["body"]["max_tokens"] == 8192
+
+
+def test_an_unreachable_ai_server_is_named_in_plain_words(monkeypatch):
+    def refuse(url, headers, json, timeout):
+        raise ai.httpx.ConnectError("[WinError 10061] (localized gibberish)")
+
+    monkeypatch.setattr(ai.httpx, "post", refuse)
+    config = ai.AIConfig("ollama", "qwen3", None, "http://localhost:11434/v1")
+    with pytest.raises(ai.AIError) as caught:
+        ai.complete_json(config, "s", "u", SCHEMA, 100)
+    message = str(caught.value)
+    assert "Could not reach" in message and "http://localhost:11434/v1" in message
+    assert "WinError" not in message
+
+
+def test_an_ai_server_error_status_is_reported_with_its_code(monkeypatch):
+    request = ai.httpx.Request("POST", "http://x/v1/chat/completions")
+    response = ai.httpx.Response(401, request=request, text='{"error": "bad key"}')
+
+    def fake_post(url, headers, json, timeout):
+        return response
+
+    monkeypatch.setattr(ai.httpx, "post", fake_post)
+    config = ai.AIConfig("deepseek", "deepseek-chat", "k", "http://x/v1")
+    with pytest.raises(ai.AIError, match="401"):
+        ai.complete_json(config, "s", "u", SCHEMA, 100)

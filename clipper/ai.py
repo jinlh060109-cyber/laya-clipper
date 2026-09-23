@@ -170,6 +170,10 @@ def _openai_compatible(config: AIConfig, system: str, user: str, schema: dict,
         )
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        # The OS's own text for this is often localized and garbled on Windows.
+        raise AIError(f"Could not reach the {config.provider} server at {config.base_url}. "
+                      f"Is it running, and is AI_BASE_URL right?") from exc
     except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
         raise AIError(f"The {config.provider} request failed: {exc}") from exc
     return parse_json(content)

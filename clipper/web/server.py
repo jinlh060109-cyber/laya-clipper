@@ -129,11 +129,14 @@ class App:
             raise ValueError("Analyze this video first; there is no clip selection yet.")
         if self.runner.busy():
             raise JobBusy("A job is already running. Wait for it to finish.")
-        chosen_style = style.save(body.get("style") or {})
+        # Check everything before saving anything: a refused request must not
+        # leave a changed style or selection behind.
+        chosen_style = style.validate({**style.load(), **(body.get("style") or {})})
         choices = body.get("choices") or []
         if not isinstance(choices, list):
             raise ValueError("choices must be a list.")
         apply_choices(run, choices)
+        style.save(chosen_style)
         self.runner.start(run, "make", {"style": chosen_style})
         return self.runner.status()
 

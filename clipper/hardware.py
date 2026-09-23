@@ -13,6 +13,8 @@ import subprocess
 import warnings
 from typing import Callable
 
+from clipper.preflight import find_binary
+
 # (setting id, ffmpeg encoder, label), in the order `auto` prefers them.
 ENCODERS: tuple[tuple[str, str, str], ...] = (
     ("nvenc", "h264_nvenc", "NVIDIA NVENC"),
@@ -129,7 +131,7 @@ def _gpu_name(kind: str) -> Callable[[], str | None]:
 
 def detect(gpus: dict[str, Callable[[], str | None]] | None = None,
            rocm: bool | None = None, encoders: list[str] | None = None,
-           ffmpeg: str = "ffmpeg") -> dict:
+           ffmpeg: str | None = None) -> dict:
     """Everything the settings page needs to offer hardware choices."""
     gpus = gpus or {kind: _gpu_name(kind) for kind in ("cuda", "xpu", "mps")}
     rocm = is_rocm() if rocm is None else rocm
@@ -149,7 +151,14 @@ def detect(gpus: dict[str, Callable[[], str | None]] | None = None,
             "detail": f"Uses {best['label']}" + (f": {best['detail']}" if best["id"] != "cpu" else ""),
             "hint": ""}
 
-    working = probe_encoders(ffmpeg) if encoders is None else encoders
+    if encoders is None:
+        # The same ffmpeg the renders use: FFMPEG_PATH, else the one on PATH.
+        try:
+            ffmpeg = ffmpeg or str(find_binary("ffmpeg", "FFMPEG_PATH"))
+            encoders = probe_encoders(ffmpeg)
+        except Exception:  # noqa: BLE001 - no ffmpeg: software encoding is still listed
+            encoders = []
+    working = encoders
     enc = []
     for eid, name, label in ENCODERS:
         ok = name == "libx264" or name in working

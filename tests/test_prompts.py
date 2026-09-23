@@ -36,3 +36,11 @@ def test_prompt_has_the_style_verbatim_the_clip_and_its_words():
 def test_prompt_without_style_notes_says_so():
     spec = prompts.edit_spec(CLIP, {**STYLE, "notes": ""}, None, "tutorial", "01-x")
     assert "No style notes" in prompts.render_prompt(spec, "", "")
+
+
+def test_an_action_clip_is_not_described_as_scored_by_laya():
+    action = {**CLIP, "id": "a0", "source": "action", "category": "action", "score": 0.53,
+              "confidence": 0.0}
+    text = prompts.render_prompt(prompts.edit_spec(action, STYLE, None, "gaming", "01-x"), "", "")
+    assert "Laya" not in text
+    assert "Action score 0.53" in text
