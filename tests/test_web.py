@@ -249,14 +249,20 @@ def test_a_stalled_upload_is_dropped_quietly_and_cleaned_up(tmp_path, monkeypatc
 def test_a_client_that_hangs_up_mid_upload_leaves_no_traceback(server, capsys):
     base, tmp_path, *_ = server
     host, port = base.removeprefix("http://").split(":")
+    def wait_until(condition):
+        deadline = time.monotonic() + 5
+        while not condition() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return condition()
+
     for _ in range(3):
         with socket.create_connection((host, int(port)), timeout=5) as sock:
             sock.sendall(b"PUT /api/upload?name=a.mp4 HTTP/1.1\r\nHost: x\r\n"
                          b"Content-Length: 100000000\r\n\r\n" + b"\x00" * 100000)
+            # Hang up only once the server is writing, so the check below
+            # cannot pass merely because it ran before the file existed.
+            assert wait_until(lambda: list(tmp_path.glob("*/video.*")))
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-    deadline = time.monotonic() + 5
-    while list(tmp_path.glob("*/video.*")) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert list(tmp_path.glob("*/video.*")) == []
+        assert wait_until(lambda: not list(tmp_path.glob("*/video.*")))
     time.sleep(0.2)
     assert "Traceback" not in capsys.readouterr().err
