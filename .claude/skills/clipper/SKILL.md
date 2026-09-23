@@ -1,115 +1,56 @@
 ---
 name: clipper
-description: Use when selecting and trimming clips from a clipper run — turns candidates.json into plan.json
+description: Use when editing a clip that clipper produced — a folder under runs/<name>/clips/ with prompt.md, edit.json, cut.mp4 and final.mp4 — to apply its edit prompt (punch-ins, pacing, style notes) and write edited.mp4
 ---
 
-# Clipper: the plan stage
+# Clipper: the AI editor (step 10)
 
-Deterministic scripts do everything except this. You read `candidates.json` and
-the transcript, and you write `plan.json`.
+The app has already chosen the clip, cut it and made a default edit. You
+apply what a fixed ffmpeg recipe could not.
 
-## Inputs
+## Input: one clip folder
 
-- `runs/<name>/candidates.json` — ranked candidates plus an `uncertain` bucket.
-- `runs/<name>/transcript.json` — word-level timings. Trim against these.
-- `runs/<name>/source.json` — duration, resolution.
-- `runs/<name>/action.json` — moments without speech, with a frame sheet each.
+`runs/<name>/clips/NN-title/` holds:
 
-Read candidates first. Only pull transcript slices for candidates you are
-seriously considering; do not read the whole transcript.
+- `prompt.md` — the instruction. It starts with the creator's style notes
+  (verbatim; they apply to every clip), then this clip's title, hook, quote,
+  punch-ins and its words with clip-local timestamps.
+- `edit.json` — the same, structured: `source_range`, `layout`, `vertical`,
+  `captions`, `caption_case`, `encoder`, `punch_ins`, `title`, `hook`.
+- `cut.mp4` — the untouched cut. Start from this.
+- `final.mp4` — the default edit (layout + captions). Use it as reference,
+  or as the base when the only change is small.
+- `captions.srt` — captions in clip time.
 
-Candidates can overlap: a long hot stretch is split into several capped
-candidates that share material. Treat them as one stretch and cut the best
-clip from it; take a second only if it covers a different moment.
-`--check` warns about clips that overlap.
+Read `prompt.md` first. Do not read the whole run's transcript; the clip's
+words are in the prompt.
 
-## Run settings
+## What to apply
 
-If `runs/<name>/settings.json` exists, the run was started from the web page.
-Read it before choosing clips:
+1. **Style notes** win over everything below. If they ask for something you
+   cannot do with the tools available, say so instead of guessing.
+2. **Punch-ins**: at each `at` second, a quick zoom (about 1.15x for 1-2 s),
+   e.g. with ffmpeg `zoompan` or `crop` + `scale` enabled only in that range.
+3. **Hook**: if there is one and the style allows on-screen text, show it for
+   the first 2 s (ffmpeg `drawtext`, or an ASS line burned with the captions).
+4. **Layout and captions** from `edit.json`: `fit` keeps the whole frame over
+   a blurred copy (never crop on-screen text away); `crop` fills 9:16.
+   Captions from `captions.srt`, uppercase when `caption_case` is `upper`.
+5. **Pacing** only when the notes ask for it (e.g. "cut every pause"): find
+   gaps between words in the prompt's transcript and remove them with
+   `select`/`aselect` or by concatenating segments.
 
-- `prompt`: what the user is looking for. Let it steer which candidates you
-  pick and how you trim. It outranks the default ranking order, never the
-  trimming rules or the 10s minimum.
-- `vertical`: set `"vertical"` on every clip to this value.
-- `profile_chosen`: the profile the run was scored with. Copy it into
-  `plan.json` as `"profile"`. If `profile_fallback` is true, Laya could not
-  tell the content type; tell the user which profile was used.
+Write the result to `edited.mp4` in the same folder. Never overwrite
+`cut.mp4` or `final.mp4`. Re-encode with the encoder named in `edit.json`
+(`auto` means: whatever `clipper hardware` shows as automatic).
 
-## What each signal means
+## Checking your work
 
-Every signal and composite is on a 0..1 scale.
+Grab two or three frames (`ffmpeg -ss T -i edited.mp4 -frames:v 1 f.png`)
+around each punch-in and the first second, look at them, and confirm the
+duration with ffprobe. Report what you applied and anything you skipped.
 
-- `peak_composite` / `curve` — where the strongest material sits in the candidate.
-- `signals.buried_lede` high — the best line is late. **Move the in-point later.**
-- `signals.opens_with_windup` high — the opening is setup. **Cut it.**
-- `signals.ends_cleanly` low — the thought does not complete. Extend, or drop it.
-- `signals.needs_speaker_id` high — set `speaker_label: true` on the clip.
-- `backward_extended: true` — the candidate was extended back from an audible
-  reaction. The line that caused the reaction is near the start. **Do not trim
-  the front of these without reading it.**
+## Later
 
-## Trimming rules
-
-1. Start on the strongest line. Mid-sentence is fine and often correct.
-2. Cut every wind-up. No "so, um", no greetings, no preamble.
-3. End on the payoff. Do not let it drag past the peak.
-4. Never open on the reaction. Keep the cause inside the clip.
-
-## Length targets
-
-| `clip_format` | Target |
-|---|---|
-| `hot_take`, `cold_open` | 15-25s |
-| `confession`, `debate` | 20-35s |
-| `how_to`, `list` | 25-40s |
-| `story_arc` | 30-45s |
-
-Under 10s is rejected outright. Over 60s needs a reason.
-
-## The uncertain bucket
-
-Laya flagged these as low-confidence. Read their transcript slices and decide
-yourself. Do not skip the bucket; that is where the model deferred to you.
-Their composites may sit below the candidate threshold: when Laya is unsure,
-its low score is no more trustworthy than a high one would be.
-
-## Action moments (no speech)
-
-If `runs/<name>/action.json` has candidates, these are stretches where nobody
-speaks, found from loudness, on-screen motion and scene cuts. Laya never saw
-them. For each one, Read its `sheet` image: six frames, left to right, top row
-first, taken at `sheet_times`. Judge them like an editor: keep clutch plays,
-fights, deaths, big reveals and anything a viewer would rewind; drop menus,
-loading screens, cutscenes and walking around. Their `signals` only say it was
-loud and busy, not that it was good.
-
-Clips taken from them use `clip_format: "action"` (15-30s), no `laya` object,
-and `captions: "none"` unless someone speaks in the range. Write the title from
-what is on screen. For a video with no speech at all, set `"laya_model": null`
-in `plan.json`.
-
-## Output
-
-Write `runs/<name>/plan.json`:
-
-```json
-{
-  "source": "runs/<name>",
-  "profile": "podcast",
-  "laya_model": { "...": "copy the whole object from candidates.json" },
-  "speakers": { "SPEAKER_00": "Ana", "SPEAKER_01": "Marco" },
-  "clips": [
-    { "in": 874.10, "out": 897.40, "title": "...", "hook": "...",
-      "description": "...", "clip_format": "hot_take", "vertical": true,
-      "crop_x": "center", "captions": "burn", "speaker_label": true,
-      "laya": { "clipworthy": 0.72, "hook_strength": 0.61, "confidence": 0.18 } }
-  ]
-}
-```
-
-Carry `laya_model` across verbatim. Then run `clipper plan <run> --check`.
-Fix every `error:` line; render refuses the plan until they are gone. Read
-each `warning:` line and either fix it or keep the clip on purpose.
-
-If the user has their own editing skills loaded, theirs override these defaults.
+An MCP video server (for example kyanitelabs/mcp-video) can replace the raw
+ffmpeg calls; the input folder and the output name stay the same.
