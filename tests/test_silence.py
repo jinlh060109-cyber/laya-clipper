@@ -45,3 +45,30 @@ def test_a_video_shorter_than_min_gap_has_no_spans():
 def test_words_past_the_end_are_clamped():
     t = words(*talk(0, 10), *talk(98, 104))
     assert silent_spans(t, 100.0) == [[10.0, 98.0]]
+
+
+def scored(*spans, score=0.9):
+    return [{"word": "w", "start": s, "end": e, "score": score} for s, e in spans]
+
+
+def test_sparse_utterances_do_not_count_as_speech():
+    """Whisper over game audio: one 'word' stretched over 29 s (the real run)."""
+    t = {"segments": [{"words": scored(*talk(0, 10))},
+                      {"words": scored((40.0, 69.0))},
+                      {"words": scored(*talk(120, 130))}]}
+    assert silent_spans(t, 130.0) == [[10.0, 120.0]]
+
+
+def test_utterances_whose_words_never_aligned_do_not_count_as_speech():
+    """6 invented words over 11 s, timings only interpolated (score 0.0)."""
+    t = {"segments": [{"words": scored(*talk(0, 10))},
+                      {"words": scored(*talk(69, 80, step=1.0), score=0.0)},
+                      {"words": scored(*talk(120, 130))}]}
+    assert silent_spans(t, 130.0) == [[10.0, 120.0]]
+
+
+def test_dense_aligned_speech_still_counts():
+    t = {"segments": [{"words": scored(*talk(0, 10))},
+                      {"words": scored(*talk(60, 70))},
+                      {"words": scored(*talk(120, 130))}]}
+    assert silent_spans(t, 130.0) == [[10.0, 60.0], [70.0, 120.0]]

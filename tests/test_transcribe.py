@@ -171,3 +171,29 @@ def test_a_passed_token_diarizes(tmp_path, monkeypatch):
     out = transcribe(tmp_path / "audio.wav", Run.create(tmp_path, "r"), hf_token="hf_x")
     assert calls == ["hf_x"]
     assert out["diarized"] is True
+
+
+def test_a_language_without_an_aligner_keeps_its_words_with_estimated_timings(
+        tmp_path, monkeypatch):
+    """Whisper sometimes "detects" e.g. Welsh over game music; whisperx has no
+    aligner for it. That must not end the run."""
+    import sys
+
+    from clipper.run import Run
+    from clipper.transcribe import transcribe
+
+    _fake_whisperx(monkeypatch, [])
+    wx = sys.modules["whisperx"]
+    wx.load_model = lambda *a, **k: type("M", (), {"transcribe": staticmethod(
+        lambda audio, batch_size: {"language": "cy", "segments": [
+            {"start": 10.0, "end": 14.0, "text": " un dau tri pedwar"}]})})()
+
+    def no_aligner(**k):
+        raise ValueError("No default align-model for language: cy")
+
+    wx.load_align_model = no_aligner
+    out = transcribe(tmp_path / "audio.wav", Run.create(tmp_path, "r"), hf_token=None)
+    words = out["segments"][0]["words"]
+    assert out["language"] == "cy"
+    assert [w["word"] for w in words] == ["un", "dau", "tri", "pedwar"]
+    assert words[0]["start"] == 10.0 and words[-1]["end"] == 14.0

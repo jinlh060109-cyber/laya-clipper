@@ -79,10 +79,20 @@ def transcribe(wav: Path, run: Run, model: str = "large-v3",
     # Nothing was said (gameplay without commentary): there is nothing to
     # align or attribute, and whisperx's aligner does not accept an empty list.
     if result["segments"]:
-        align_model, metadata = whisperx.load_align_model(language_code=language,
-                                                          device=device)
-        result = whisperx.align(result["segments"], align_model, metadata,
-                                audio, device, return_char_alignments=False)
+        try:
+            align_model, metadata = whisperx.load_align_model(language_code=language,
+                                                              device=device)
+        except ValueError:
+            # whisperx has no aligner for this language (or Whisper misread game
+            # audio as, say, Welsh). Keep the words; their timings are spread
+            # evenly across each segment by normalize_transcript.
+            print(f"No word aligner for language {language!r}; word timings are estimated.")
+            result = {"segments": [
+                {**seg, "words": [{"word": w} for w in seg.get("text", "").split()]}
+                for seg in result["segments"]]}
+        else:
+            result = whisperx.align(result["segments"], align_model, metadata,
+                                    audio, device, return_char_alignments=False)
 
     # The caller decides: None means "do not diarize" (--no-diarize, the web
     # toggle), so there is deliberately no fallback to $HF_TOKEN here.
