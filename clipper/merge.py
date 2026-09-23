@@ -9,17 +9,23 @@ SIGNAL_KEYS = ("buried_lede", "opens_with_windup", "ends_cleanly",
                "audible_reaction", "self_contained")
 
 
-def _group(ids: list[int], by_id: dict[int, dict]) -> list[list[int]]:
+def _group(ids: list[int], by_id: dict[int, dict],
+           max_seconds: float = float("inf")) -> list[list[int]]:
     """Group hot windows into runs that are contiguous in id AND in time.
 
     Id adjacency alone is not enough: windowing anchors on word starts and skips
     across silences, so consecutive windows can sit far apart in the source.
+
+    A run that would span more than `max_seconds` starts a new group, so a long
+    hot stretch becomes several candidates rather than one cropped to its peak
+    with the remainder discarded.
     """
     runs: list[list[int]] = []
     for wid in ids:
         prev = runs[-1][-1] if runs else None
         if (prev is not None and wid == prev + 1
-                and by_id[wid]["start"] <= by_id[prev]["end"]):
+                and by_id[wid]["start"] <= by_id[prev]["end"]
+                and by_id[wid]["end"] - by_id[runs[-1][0]]["start"] <= max_seconds):
             runs[-1].append(wid)
         else:
             runs.append([wid])
@@ -96,8 +102,8 @@ def merge_candidates(windows: list[dict], ranked: list[dict], profile: Profile) 
 
 def _built(ids: list[int], by_id: dict, ranked_by_id: dict, profile: Profile) -> list[dict]:
     """Group, build, sort by peak descending, then number in that order."""
-    built = [_build(run, by_id, ranked_by_id, profile, i)
-             for i, run in enumerate(_group(ids, by_id))]
+    runs = _group(ids, by_id, profile.merge.get("max_seconds", 60.0))
+    built = [_build(run, by_id, ranked_by_id, profile, i) for i, run in enumerate(runs)]
     built.sort(key=lambda c: c["peak_composite"], reverse=True)
     for i, candidate in enumerate(built):
         candidate["id"] = i

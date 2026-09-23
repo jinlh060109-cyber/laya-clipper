@@ -135,3 +135,14 @@ def test_uncertain_bucket_is_sorted_by_peak_descending():
     out = merge_candidates(windows, ranked, PROFILE)
     assert [c["window_ids"] for c in out["uncertain"]] == [[1], [0]]
     assert [c["id"] for c in out["uncertain"]] == [0, 1]
+
+
+def test_a_long_hot_stretch_splits_into_capped_candidates_instead_of_losing_the_rest():
+    windows = [_window(i, i * 10.0) for i in range(12)]   # 0..140 s, all hot
+    ranked = [_ranked(i, 0.8) for i in range(12)]
+    out = merge_candidates(windows, ranked, PROFILE)
+    assert len(out["candidates"]) > 1
+    assert all(c["end"] - c["start"] <= 60.0 + 1e-6 for c in out["candidates"])
+    covered = sorted(i for c in out["candidates"] for i in c["window_ids"])
+    assert covered == list(range(12))
+    assert max(c["end"] for c in out["candidates"]) == 140.0
