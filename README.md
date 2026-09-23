@@ -37,7 +37,7 @@ scoring finishes, ask Claude to plan the run, then render it.
 
 Or from the command line:
 
-    clipper all "episode47.mp4" --profile podcast --vertical
+    clipper all "episode47.mp4" --profile podcast
 
 Then ask Claude to run the plan stage, and:
 

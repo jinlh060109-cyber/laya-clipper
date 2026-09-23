@@ -203,3 +203,9 @@ def test_score_prints_progress_while_it_runs(capsys, tmp_path, monkeypatch):
     monkeypatch.setattr("clipper.cli.run_score", fake_score)
     assert main(["score", str(run.root), "--profile", "podcast"]) == 0
     assert "3/3" in capsys.readouterr().err
+
+
+def test_all_does_not_accept_vertical_because_it_never_renders():
+    with pytest.raises(SystemExit) as exit_info:
+        main(["all", "video.mp4", "--profile", "podcast", "--vertical"])
+    assert exit_info.value.code == 2

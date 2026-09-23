@@ -17,6 +17,11 @@ the transcript, and you write `plan.json`.
 Read candidates first. Only pull transcript slices for candidates you are
 seriously considering; do not read the whole transcript.
 
+Candidates can overlap: a long hot stretch is split into several capped
+candidates that share material. Treat them as one stretch and cut the best
+clip from it; take a second only if it covers a different moment.
+`--check` warns about clips that overlap.
+
 ## Run settings
 
 If `runs/<name>/settings.json` exists, the run was started from the web page.
