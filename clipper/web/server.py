@@ -109,6 +109,17 @@ class App:
                     os.environ[name] = value
         return provider, values, config
 
+    def ai_models(self, body: dict) -> dict:
+        """The models a provider offers, asked of the provider itself. The key
+        and address may come from the form, before they are saved."""
+        provider = str(body.get("provider") or "").strip().lower()
+        try:
+            models = ai.list_models(provider, str(body.get("api_key") or "").strip() or None,
+                                    str(body.get("base_url") or "").strip() or None)
+        except ai.AIError as exc:
+            raise ValueError(str(exc)) from exc
+        return {"provider": provider, "models": models}
+
     def save_ai(self, body: dict) -> dict:
         """Choose the AI provider and model, and optionally store its key.
 
@@ -434,9 +445,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                              _CountingReader(self.rfile))
                 return
             path = urlparse(self.path).path
-            if path == "/api/ai/test":
+            if path in ("/api/ai/test", "/api/ai/models"):
+                action = app.test_ai if path == "/api/ai/test" else app.ai_models
                 try:
-                    self._json(200, app.test_ai(self._body()))
+                    self._json(200, action(self._body()))
                 except (ValueError, json.JSONDecodeError) as error:
                     self._json(400, {"error": str(error)})
                 return

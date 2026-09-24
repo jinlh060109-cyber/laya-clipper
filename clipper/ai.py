@@ -33,8 +33,8 @@ PROVIDERS: dict[str, dict] = {
         "label": "Alibaba Cloud Token Plan", "kind": "openai",
         "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
         "key_env": "ALIBABA_TOKEN_PLAN_API_KEY", "default_model": "qwen3.8-max",
-        "models": ["qwen3.8-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.8-flash",
-                   "deepseek-v4-pro", "kimi-k2.6", "glm-5.3", "MiniMax-M2.5"],
+        "models": ["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-flash", "qwen3.6-flash",
+                   "deepseek-v4-pro", "deepseek-v4.1-flash", "glm-5.3", "glm-5.2"],
         "key_hint": "Token Plan key, starts with sk-sp- (Singapore region)",
         "no_thinking": {"enable_thinking": False}, "fallback_model": "qwen3.8-flash"},
     "alibaba": {"label": "Alibaba Cloud Model Studio (pay-as-you-go)", "kind": "openai",
@@ -118,6 +118,106 @@ def config_from_env() -> AIConfig | None:
     if provider not in PROVIDERS:
         raise ValueError(f"Unknown AI_PROVIDER {provider!r}. Valid: {', '.join(PROVIDERS)}.")
     return config_for(provider)
+
+
+ANTHROPIC_VERSION = "2023-06-01"
+# Listing endpoints also return models this app cannot use (it needs a chat
+# model that writes JSON): images, video, speech, embeddings, moderation.
+_NOT_CHAT = re.compile(
+    r"(embed|rerank|tts|asr|whisper|transcri|audio|speech|realtime|image|dall-e|"
+    r"sora|video|^wan\d|moderation|omni-moderation|vision-preview|ocr|paraformer|"
+    r"cosyvoice|sambert|^auto$)", re.I)
+
+
+def list_models(provider: str, api_key: str | None = None,
+                base_url: str | None = None) -> list[dict]:
+    """The chat models `provider` offers this key, newest or most relevant
+    first, as [{"id", "name"}]. Asks the provider's own model-list API; a
+    key typed on the page may be passed in before it is saved.
+
+    Claude: GET /v1/models (paged). Model Studio: GET /api/v1/models filtered
+    to text generation. Everything else: the OpenAI-style GET {base}/models."""
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unknown AI provider {provider!r}.")
+    spec = PROVIDERS[provider]
+    key = api_key or _key(provider)
+    base = (base_url or (os.environ.get("AI_BASE_URL") if provider == "custom" else None)
+            or spec["base_url"] or "").rstrip("/")
+    if spec["kind"] == "openai" and not base:
+        raise ValueError(f"{spec['label']} needs a server address first.")
+    if spec["key_env"] and not key and provider not in ("ollama", "custom"):
+        raise ValueError(f"Enter the {spec['label']} key to list its models.")
+    try:
+        if spec["kind"] == "anthropic":
+            models = _list_claude(key)
+        elif provider == "alibaba":
+            models = _list_model_studio(base, key)
+        else:
+            models = _list_openai(base, key)
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        why = ("the key was refused" if code in (401, 403)
+               else "this server has no model list" if code == 404 else f"HTTP {code}")
+        raise AIError(f"Could not list {spec['label']} models: {why}.") from exc
+    except httpx.HTTPError as exc:
+        raise AIError(f"Could not reach {spec['label']} to list its models.") from exc
+    seen, out = set(), []
+    for model in models:
+        if model["id"] and model["id"] not in seen and not _NOT_CHAT.search(model["id"]):
+            seen.add(model["id"])
+            out.append(model)
+    return out
+
+
+def _get(url: str, headers: dict, params: dict | None = None) -> dict:
+    response = httpx.get(url, headers=headers, params=params, timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def _list_claude(key: str | None) -> list[dict]:
+    headers = {"x-api-key": key or "", "anthropic-version": ANTHROPIC_VERSION}
+    models, after = [], None
+    for _ in range(20):
+        page = _get("https://api.anthropic.com/v1/models", headers,
+                    {"limit": 1000, **({"after_id": after} if after else {})})
+        models += [{"id": m["id"], "name": m.get("display_name") or m["id"]}
+                   for m in page.get("data") or []]
+        if not page.get("has_more"):
+            break
+        after = page.get("last_id")
+    return models  # the API lists newest first
+
+
+def _list_model_studio(base: str, key: str | None) -> list[dict]:
+    # .../compatible-mode/v1 -> .../api/v1/models, the native catalogue that
+    # can filter to text generation (TG).
+    root = base.split("/compatible-mode")[0]
+    headers = {"Authorization": f"Bearer {key}"}
+    models = []
+    for page_no in range(1, 21):
+        page = _get(f"{root}/api/v1/models", headers,
+                    {"capabilities": "TG", "page_no": page_no, "page_size": 100})
+        batch = (page.get("output") or {}).get("models") or []
+        models += [{"id": m.get("model") or "", "name": m.get("name") or m.get("model") or ""}
+                   for m in batch]
+        if len(batch) < 100:
+            break
+    return models
+
+
+def _list_openai(base: str, key: str | None) -> list[dict]:
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    data = _get(f"{base}/models", headers).get("data") or []
+    models = []
+    for m in data:
+        outputs = ((m.get("architecture") or {}).get("output_modalities"))  # OpenRouter
+        if outputs is not None and outputs != ["text"]:
+            continue
+        models.append({"id": m.get("id") or "", "name": m.get("name") or m.get("id") or "",
+                       "created": m.get("created") or 0})
+    models.sort(key=lambda m: -int(m.pop("created") or 0))  # newest first
+    return models
 
 
 def available_providers() -> list[dict]:

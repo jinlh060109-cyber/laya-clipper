@@ -46,6 +46,8 @@
   button.quiet { background: transparent; color: var(--accent); border: 1px solid var(--line);
                  padding: 6px 12px; font-weight: 500; }
   button:disabled { opacity: .45; cursor: not-allowed; }
+  #ai-models-refresh { padding: 0 8px; margin-left: 6px; font-size: 12px; line-height: 18px; }
+  #ai-model { margin-top: 6px; }
   ol { list-style: none; margin: 0; padding: 0; }
   #stages li { display: flex; justify-content: space-between; padding: 8px 0;
                border-bottom: 1px solid var(--line); }
@@ -105,9 +107,11 @@
         <div id="ai-key-state" class="hint"></div>
       </div>
       <div>
-        <label for="ai-model">Model</label>
-        <input id="ai-model" type="text" list="ai-models" autocomplete="off">
+        <label for="ai-model-pick">Model <button id="ai-models-refresh" class="quiet" type="button" title="Ask the provider again">↻</button></label>
+        <select id="ai-model-pick"></select>
+        <input id="ai-model" type="text" list="ai-models" autocomplete="off" placeholder="or type a model name">
         <datalist id="ai-models"></datalist>
+        <div id="ai-models-state" class="hint"></div>
       </div>
       <div class="full" id="ai-key-row">
         <label for="ai-key">API key <span id="ai-key-env" class="hint"></span></label>
@@ -319,9 +323,12 @@ function showProvider(model) {
   $("ai-key-row").hidden = !p || p.key_env === null;
   $("ai-url-row").hidden = !p || !p.needs_base_url;
   $("ai-result").textContent = "";
-  if (!p) { $("ai-model").value = ""; $("ai-key-state").textContent = "Clips are cut at sentence ends; no AI fill-in."; return; }
+  if (!p) { $("ai-model").value = ""; $("ai-model-pick").textContent = ""; $("ai-model-pick").disabled = true;
+    $("ai-models-state").textContent = ""; $("ai-key-state").textContent = "Clips are cut at sentence ends; no AI fill-in."; return; }
   for (const m of p.models) option(list, m, m);
   $("ai-model").value = model || p.model || p.default_model || "";
+  $("ai-model-pick").disabled = false;
+  loadModels(false);
   $("ai-model").placeholder = p.models.length ? p.models[0] : "model name";
   $("ai-key").value = "";
   $("ai-key-env").textContent = p.key_env ? "(" + p.key_env + ")" : "";
@@ -371,6 +378,57 @@ async function applyAIForm() {
     $("ai-panel").open = true;
     $("ai-result").className = "warn"; $("ai-result").textContent = error.message;
     throw new Error("The AI settings could not be used: " + error.message);
+  }
+}
+
+// The model list comes from the provider's own API, for the key in the form
+// (typed or saved). Each answer is kept per provider+key+address until reload.
+const modelCache = {};
+let modelSeq = 0;
+
+function fillModelPick(models, current) {
+  const pick = $("ai-model-pick");
+  pick.textContent = "";
+  for (const m of models) option(pick, m.id, m.name && m.name !== m.id ? m.name + "  (" + m.id + ")" : m.id);
+  option(pick, "", "Other: type the name below");
+  pick.value = models.some((m) => m.id === current) ? current : "";
+  const list = $("ai-models");
+  list.textContent = "";
+  for (const m of models) option(list, m.id, m.name || m.id);
+}
+
+async function loadModels(force) {
+  const form = aiForm();
+  const p = config.ai.providers.find((x) => x.id === form.provider);
+  if (!p) return;
+  const cacheKey = [form.provider, form.api_key || "", form.base_url || ""].join("|");
+  const current = $("ai-model").value;
+  const seq = ++modelSeq;
+  if (!force && modelCache[cacheKey]) {
+    fillModelPick(modelCache[cacheKey], current);
+    $("ai-models-state").textContent = modelCache[cacheKey].length + " models available.";
+    return;
+  }
+  fillModelPick(p.models.map((id) => ({ id, name: id })), current);
+  if (p.key_env && !p.has_key && !form.api_key) {
+    $("ai-models-state").textContent = "Enter the key to see every model this provider offers you.";
+    return;
+  }
+  if (p.needs_base_url && !form.base_url) {
+    $("ai-models-state").textContent = "Enter the server address to see its models.";
+    return;
+  }
+  $("ai-models-state").textContent = "Asking " + p.label + " for its models…";
+  try {
+    const r = await send("/api/ai/models", "POST", { provider: form.provider, api_key: form.api_key, base_url: form.base_url });
+    if (seq !== modelSeq) return;  // the user picked something else meanwhile
+    modelCache[cacheKey] = r.models;
+    fillModelPick(r.models, $("ai-model").value);
+    $("ai-models-state").textContent = r.models.length ? r.models.length + " models available."
+      : "The provider listed no chat models; type a model name.";
+  } catch (error) {
+    if (seq !== modelSeq) return;
+    $("ai-models-state").textContent = error.message + " Showing the usual models; you can type any name.";
   }
 }
 
@@ -668,6 +726,19 @@ $("save-style").addEventListener("click", saveStyle);
 $("preview-btn").addEventListener("click", showPreview);
 $("ai-provider").addEventListener("change", () => showProvider());
 for (const id of ["ai-model", "ai-key", "ai-url"]) $(id).addEventListener("input", showAIPending);
+$("ai-model-pick").addEventListener("change", () => {
+  if ($("ai-model-pick").value) $("ai-model").value = $("ai-model-pick").value;
+  else $("ai-model").focus();
+  showAIPending();
+});
+$("ai-model").addEventListener("input", () => {
+  const pick = $("ai-model-pick"), typed = $("ai-model").value.trim();
+  pick.value = [...pick.options].some((o) => o.value === typed) ? typed : "";
+});
+// A key or address typed in the form may unlock a different list.
+$("ai-key").addEventListener("change", () => loadModels(false));
+$("ai-url").addEventListener("change", () => loadModels(false));
+$("ai-models-refresh").addEventListener("click", () => loadModels(true));
 $("ai-save").addEventListener("click", saveAI);
 $("ai-test").addEventListener("click", testAI);
 
