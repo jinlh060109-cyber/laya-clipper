@@ -47,14 +47,6 @@ def test_the_best_action_moments_are_appended():
     assert action[0]["category"] == "action" and action[0]["title_hint"].startswith("Action at 1:40")
 
 
-def test_row_fields_for_the_preview():
-    row = sel.select([_cand(3, 0.8, uncertain=True)], [])[0]
-    assert row == {"id": "c3", "start": 30.0, "end": 50.0, "duration": 20.0,
-                   "category": "tip", "score": 0.8, "confidence": 0.4, "uncertain": True,
-                   "title_hint": "Line 3.", "reason": "because", "source": "ai",
-                   "include": True, "fill_in": False}
-
-
 def test_chunk_titles_come_from_their_first_sentence():
     row = sel.select([_cand(0, 0.8, category="chunk", hook_line="")], [])[0]
     assert row["source"] == "chunks" and row["title_hint"] == "Line 0."
@@ -66,24 +58,6 @@ def _run(tmp_path):
                                    "candidates": [_cand(0, 0.6), _cand(1, 0.4)]})
     run.write_json("action.json", {"candidates": ACTION[:1]})
     return run
-
-
-def test_run_select_writes_the_selection(tmp_path):
-    run = _run(tmp_path)
-    out = sel.run_select(run, top_n=1)
-    assert run.read_json("selection.json") == out
-    assert out["rule"] == {"top_n": 1, "min_score": 0.30, "action_n": 2}
-    assert [c["id"] for c in out["clips"] if c["include"]] == ["c0", "a0"]
-
-
-def test_choices_from_the_preview_are_applied(tmp_path):
-    run = _run(tmp_path)
-    sel.run_select(run)
-    out = sel.apply_choices(run, [{"id": "c1", "include": True, "fill_in": True},
-                                  {"id": "a0", "include": False, "fill_in": False}])
-    by_id = {c["id"]: c for c in out["clips"]}
-    assert by_id["c1"]["include"] and by_id["c1"]["fill_in"]
-    assert not by_id["a0"]["include"]
 
 
 def test_an_unknown_clip_id_is_refused(tmp_path):

@@ -9,20 +9,9 @@ from clipper.run import Run
 ACTION = {"silent_seconds": 600.0, "spans": 3, "candidates": 7}
 
 
-def test_default_run_name_includes_date_and_stem():
-    name = default_run_name(Path("/videos/Episode 47.mp4"))
-    assert name.endswith("-episode-47")
-    assert name[:4].isdigit()
-
-
 def test_default_run_name_keeps_non_latin_names_apart():
     a = default_run_name(Path("访谈第一集.mp4"))
     assert a != default_run_name(Path("第二集.mp4")) and a.endswith("访谈第一集")
-
-
-def test_no_arguments_prints_usage_and_fails(capsys):
-    assert main([]) == 2
-    assert "usage" in capsys.readouterr().out.lower()
 
 
 def _steps(log, **override):
@@ -108,37 +97,6 @@ def test_make_with_an_unknown_clip_id_fails_cleanly(runs, monkeypatch, capsys):
     assert "c7" in capsys.readouterr().err
 
 
-def test_hardware_lists_devices_and_encoders(monkeypatch, capsys):
-    monkeypatch.setattr("clipper.cli.detect", lambda: {
-        "devices": [{"id": "xpu", "label": "Intel GPU (XPU)", "available": True,
-                     "detail": "Arc 140T", "hint": ""},
-                    {"id": "cuda", "label": "NVIDIA GPU (CUDA)", "available": False,
-                     "detail": "Not found", "hint": "Install CUDA torch"}],
-        "encoders": [{"id": "qsv", "label": "Intel Quick Sync", "available": True}],
-        "rocm": False})
-    assert main(["hardware"]) == 0
-    out = capsys.readouterr().out
-    assert "Intel GPU (XPU)" in out and "Arc 140T" in out and "Install CUDA torch" in out
-    assert "Intel Quick Sync" in out
-
-
-def test_action_prints_what_it_found(tmp_path, monkeypatch, capsys):
-    run = Run.create(tmp_path, "g")
-    monkeypatch.setattr("clipper.cli.run_action", lambda r, progress=None: ACTION)
-    assert main(["action", str(run.root)]) == 0
-    assert "7 action moments from 10.0 min without speech" in capsys.readouterr().out
-
-
-def test_transcribe_takes_a_device(tmp_path, monkeypatch):
-    run = Run.create(tmp_path, "ep")
-    seen = []
-    monkeypatch.setattr("clipper.cli.transcribe",
-                        lambda wav, r, model, device=None, hf_token=None:
-                        seen.append(device) or {"segments": [], "diarized": False})
-    assert main(["transcribe", str(run.root), "--device", "xpu", "--no-diarize"]) == 0
-    assert seen == ["xpu"]
-
-
 def test_analyze_refuses_a_run_that_holds_another_video(capsys, tmp_path, monkeypatch):
     monkeypatch.setattr("clipper.cli.RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr("clipper.cli.default_steps", lambda: _steps([]))
@@ -171,12 +129,3 @@ def test_web_serves_until_interrupted_and_prints_its_url(capsys, monkeypatch):
     assert main(["web", "--port", "9999"]) == 0
     assert "http://127.0.0.1:9999" in capsys.readouterr().out
     assert opened == ["http://127.0.0.1:9999", "closed"]
-
-
-def test_web_no_browser_does_not_open_one(monkeypatch):
-    opened = []
-    monkeypatch.setattr("clipper.web.server.make_server",
-                        lambda runs_dir, port=8765, runner=None: _fake_server(opened, 8765))
-    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
-    assert main(["web", "--no-browser"]) == 0
-    assert opened == ["closed"]

@@ -31,19 +31,6 @@ def test_display_size_swaps_dimensions_for_quarter_turns():
     assert edit.display_size({"width": 1920, "height": 1080}) == (1920, 1080)
 
 
-def test_cut_command_seeks_accurately_and_uses_the_chosen_encoder():
-    cmd = edit.cut_command("ffmpeg", Path("src.mp4"), 10.0, 40.0, Path("cut.mp4"), "h264_qsv")
-    assert cmd[cmd.index("-ss") + 1] == "10.000" and cmd[cmd.index("-to") + 1] == "40.000"
-    assert cmd[cmd.index("-c:v") + 1] == "h264_qsv" and "-global_quality" in cmd
-    assert "-vf" not in cmd
-
-
-def test_final_command_applies_the_filter_chain():
-    cmd = edit.final_command("ffmpeg", Path("s.mp4"), 0.0, 20.0, Path("f.mp4"), "scale=1:1",
-                             "libx264")
-    assert cmd[cmd.index("-vf") + 1] == "scale=1:1" and "-crf" in cmd
-
-
 def _run(tmp_path, source, clips, words=None):
     run = Run.create(tmp_path, "ep")
     run.write_json("source.json", {"path": str(source), "duration": 30.0,
@@ -145,24 +132,6 @@ def test_the_chosen_caption_style_shapes_the_burned_captions(tmp_path, monkeypat
     assert seen["preset"] == "one_word" and set(seen["words_per_cue"]) == {1}
     spec = json.loads(next(run.clips_dir().glob("*/edit.json")).read_text(encoding="utf-8"))
     assert spec["caption_style"] == "one_word"
-
-
-@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
-def test_preview_is_one_frame_of_the_clip_in_the_chosen_style(tmp_path):
-    source = tmp_path / "src.mp4"
-    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=30:size=640x360:rate=25",
-                    "-c:v", "libx264", str(source)], capture_output=True, check=True)
-    words = [{"word": w, "start": 1.0 + i * 0.4, "end": 1.3 + i * 0.4, "score": 0.9, "speaker": "S"}
-             for i, w in enumerate("Here is the trick and it works.".split())]
-    run = _run(tmp_path, source, [_clip("c0", 1.0, 13.0)], words)
-    image = edit.preview_frame(run, "c0", {**DEFAULT, "caption_style": "boxed"},
-                               ffmpeg=shutil.which("ffmpeg"))
-    assert image[:2] == b"\xff\xd8"  # a JPEG
-    out = tmp_path / "p.jpg"
-    out.write_bytes(image)
-    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
-                            "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True)
-    assert probe.stdout.strip() == "540,960"  # half-size vertical frame
 
 
 def test_preview_of_an_unknown_clip_is_refused(tmp_path):

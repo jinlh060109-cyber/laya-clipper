@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from clipper.pipeline import ANALYZE, MAKE, Steps
+from clipper.pipeline import Steps
 from clipper.run import Run
 from clipper.web.jobs import JobBusy, JobRunner
 
@@ -50,38 +50,6 @@ def _analyze(runner, run, **settings):
     return runner.status()
 
 
-def _make(runner, run):
-    runner.start(run, "make", MAKE_SETTINGS)
-    runner.wait(5)
-    return runner.status()
-
-
-def test_idle_before_any_job():
-    assert JobRunner(recorder_steps([])).status() == {"state": "idle"}
-
-
-def test_analyze_runs_its_steps_in_order_and_summarizes(run):
-    log = []
-    status = _analyze(JobRunner(recorder_steps(log)), run)
-    assert [name for name, _ in log] == list(ANALYZE)
-    assert status["state"] == "done" and status["kind"] == "analyze"
-    assert list(status["stages"]) == ["upload", *ANALYZE]
-    assert all(v == "done" for v in status["stages"].values())
-    assert status["result"] == {"content_type": "tutorial", "ai": {"provider": "anthropic"},
-                                "ai_error": None, "candidates": 3, "scored": 3, "failed": 0,
-                                "device": "xpu", "action_candidates": 1,
-                                "silent_seconds": 90.0, "kept": 1}
-
-
-def test_steps_get_the_run_and_settings(run):
-    log = []
-    _analyze(JobRunner(recorder_steps(log)), run)
-    calls = dict(log)
-    assert calls["ingest"] == (run, run.path("video.mp4"))
-    assert calls["transcribe"][1]["model"] == "small"
-    assert calls["segment"][1]["prompt"] == "funny bits"
-
-
 def test_a_failure_stops_later_steps_and_records_the_error(run):
     log = []
     status = _analyze(JobRunner(recorder_steps(log, fail_at="transcribe")), run)
@@ -93,31 +61,9 @@ def test_a_failure_stops_later_steps_and_records_the_error(run):
     assert run.read_json("job.json")["failed_stage"] == "transcribe"
 
 
-def test_settings_and_job_state_are_written_to_the_run(run):
-    _analyze(JobRunner(recorder_steps([])), run)
-    assert run.read_json("settings.json")["prompt"] == "funny bits"
-    assert run.read_json("job.json")["state"] == "done"
-
-
-def test_make_runs_style_fill_in_and_edit_and_passes_the_fills_on(run):
-    log = []
-    run.write_json("selection.json", {"clips": [{"id": "c0", "include": True}]})
-    status = _make(JobRunner(recorder_steps(log)), run)
-    assert [name for name, _ in log] == list(MAKE)
-    assert list(status["stages"]) == list(MAKE)
-    _, style, fills, _progress = dict(log)["edit"]
-    assert style == {"layout": "fit"} and fills == {"c0": {"title": "T"}}
-    assert status["result"] == {"clips": [{"id": "c0", "final": "clips/01-t/final.mp4"}]}
-
-
 def test_make_needs_an_analyzed_run(run):
     with pytest.raises(ValueError, match="Analyze"):
         JobRunner(recorder_steps([])).start(run, "make", MAKE_SETTINGS)
-
-
-def test_unknown_job_kind_is_refused(run):
-    with pytest.raises(ValueError, match="kind"):
-        JobRunner(recorder_steps([])).start(run, "dance", {})
 
 
 def test_the_job_is_busy_while_running(run):

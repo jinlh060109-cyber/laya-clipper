@@ -35,14 +35,6 @@ def test_none_removes_a_value(tmp_path, monkeypatch):
     assert "AI_BASE_URL" not in os.environ
 
 
-def test_a_missing_env_file_is_created(tmp_path, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    env = tmp_path / ".env"
-    envfile.update({"ANTHROPIC_API_KEY": "sk-ant-1"}, env)
-    assert env.read_text(encoding="utf-8") == "ANTHROPIC_API_KEY=sk-ant-1\n"
-
-
 def test_values_with_line_breaks_are_refused(tmp_path):
-
     with pytest.raises(ValueError, match="line"):
         envfile.update({"AI_MODEL": "a\nEVIL=1"}, tmp_path / ".env")

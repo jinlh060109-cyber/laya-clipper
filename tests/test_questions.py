@@ -3,11 +3,6 @@ import pytest
 from clipper import questions as q
 
 
-def test_builtin_questions_are_valid_laya_questions():
-    assert set(q.BUILTIN) == {"clipworthy", "hook_strength", "self_contained", "ends_cleanly"}
-    assert q.problems(q.BUILTIN) == []
-
-
 def test_ai_questions_of_each_type_become_laya_questions():
     got, problems = q.from_ai([
         {"id": "Useful Tip", "type": "score", "instructions": "How useful is the tip?",

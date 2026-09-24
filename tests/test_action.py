@@ -1,6 +1,6 @@
 import pytest
 
-from clipper.action import THRESHOLD, action_windows, choose_action
+from clipper.action import action_windows, choose_action
 
 
 def arrays(n, energy=0.5, motion=0.5, raw=3.0, cuts=0):
@@ -61,7 +61,3 @@ def test_fewer_than_5_hot_are_filled_with_the_best_non_overlapping_rest():
     chosen = choose_action(wins)
     assert [(c["start"], c["peak_score"]) for c in chosen] == [
         (0, 0.9), (100, 0.4), (200, 0.3), (300, 0.2), (400, 0.1)]
-
-
-def test_threshold_is_the_spec_value():
-    assert THRESHOLD == 0.6

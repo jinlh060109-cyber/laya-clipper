@@ -1,10 +1,8 @@
 from clipper.energy import rolling_baseline
 
-def test_output_length_matches_input():
-    assert len(rolling_baseline([0.1] * 100, baseline_seconds=10)) == 100
-
 def test_flat_signal_normalizes_to_midpoint():
     out = rolling_baseline([0.5] * 100, baseline_seconds=10)
+    assert len(out) == 100
     assert all(abs(v - 0.5) < 1e-6 for v in out)
 
 def test_spike_in_quiet_stretch_scores_high():

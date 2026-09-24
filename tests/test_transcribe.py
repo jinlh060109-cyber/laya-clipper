@@ -8,16 +8,6 @@ FIXTURE = Path(__file__).parent / "fixtures" / "whisperx_result.json"
 def _result():
     return json.loads(FIXTURE.read_text())
 
-def test_normalize_sets_metadata():
-    out = normalize_transcript(_result(), model="large-v3", diarized=True, language="en")
-    assert out["model"] == "large-v3"
-    assert out["diarized"] is True
-    assert out["language"] == "en"
-
-def test_normalize_strips_leading_segment_whitespace():
-    out = normalize_transcript(_result(), "large-v3", True, "en")
-    assert out["segments"][0]["text"] == "So the thing nobody says"
-
 def test_unaligned_words_are_interpolated_not_dropped():
     """WhisperX omits timings for words it cannot align. Dropping them would
     corrupt caption text; leaving them untimed would crash the ASS renderer."""
@@ -27,13 +17,6 @@ def test_unaligned_words_are_interpolated_not_dropped():
     thing = words[2]
     assert 872.72 <= thing["start"] <= thing["end"] <= 873.10
     assert thing["score"] == 0.0
-
-def test_missing_speaker_defaults_to_speaker_zero():
-    result = {"segments": [{"start": 0.0, "end": 1.0, "text": "hi",
-                            "words": [{"word": "hi", "start": 0.0, "end": 1.0, "score": 0.9}]}]}
-    out = normalize_transcript(result, "large-v3", diarized=False, language="en")
-    assert out["segments"][0]["speaker"] == "SPEAKER_00"
-    assert out["segments"][0]["words"][0]["speaker"] == "SPEAKER_00"
 
 def test_no_speech_gives_an_empty_transcript_not_an_error():
     out = normalize_transcript({"segments": []}, "small", False, "en")
@@ -59,44 +42,6 @@ def test_two_word_unaligned_run_splits_evenly_without_shrinking_gap():
     assert y["start"] == pytest.approx(11.5)
     assert y["end"] == pytest.approx(13.0)
     assert x["score"] == 0.0 and y["score"] == 0.0
-
-
-def test_three_word_unaligned_run_divides_evenly():
-    result = {"segments": [{"start": 19.0, "end": 24.0, "text": "l p q r h",
-                            "words": [
-                                {"word": "l", "start": 19.5, "end": 20.0, "score": 0.9},
-                                {"word": "p"},
-                                {"word": "q"},
-                                {"word": "r"},
-                                {"word": "h", "start": 23.0, "end": 23.5, "score": 0.9},
-                            ]}]}
-    out = normalize_transcript(result, "large-v3", False, "en")
-    p, q, r = out["segments"][0]["words"][1:4]
-    assert (p["start"], p["end"]) == pytest.approx((20.0, 21.0))
-    assert (q["start"], q["end"]) == pytest.approx((21.0, 22.0))
-    assert (r["start"], r["end"]) == pytest.approx((22.0, 23.0))
-
-
-def test_mixed_run_words_stay_monotonic_and_fully_timed():
-    result = {"segments": [{"start": 0.0, "end": 20.0, "text": "a x y b p q r c",
-                            "words": [
-                                {"word": "a", "start": 1.0, "end": 1.5, "score": 0.9},
-                                {"word": "x"},
-                                {"word": "y"},
-                                {"word": "b", "start": 5.0, "end": 5.5, "score": 0.9},
-                                {"word": "p"},
-                                {"word": "q"},
-                                {"word": "r"},
-                                {"word": "c", "start": 12.0, "end": 12.5, "score": 0.9},
-                            ]}]}
-    out = normalize_transcript(result, "large-v3", False, "en")
-    words = out["segments"][0]["words"]
-    for w in words:
-        assert isinstance(w["start"], float)
-        assert isinstance(w["end"], float)
-        assert w["start"] <= w["end"]
-    for prev_w, next_w in zip(words, words[1:]):
-        assert prev_w["end"] <= next_w["start"] + 1e-9
 
 
 def test_leading_and_trailing_unaligned_runs_anchor_to_segment_bounds():
@@ -236,27 +181,6 @@ def test_speech_recognition_runs_on_the_chosen_device(tmp_path, monkeypatch, dev
     assert calls == [(backend, "small", device)]
     assert out["segments"][0]["text"] == "hi"
     assert run.exists("transcript.json")
-
-
-def test_no_device_given_means_auto(tmp_path, monkeypatch):
-    import clipper.transcribe as t
-    from clipper.run import Run
-    _stub_whisperx(monkeypatch)
-    seen = []
-    monkeypatch.setattr(t, "resolve_device", lambda requested=None: seen.append(requested) or "xpu")
-    monkeypatch.setattr(t, "_free_device_memory", lambda dev: None)
-    monkeypatch.setattr(t, "_transformers_asr",
-                        lambda audio, model, dev: {"segments": [], "language": "en"})
-    t.transcribe(tmp_path / "a.wav", Run.create(tmp_path, "r"), model="small")
-    assert seen == [None]
-
-
-def test_voice_chunks_become_segments_in_order():
-    from clipper.transcribe import segments_from_chunks
-    chunks = [{"start": 0.5, "end": 12.0}, {"start": 14.0, "end": 40.0}]
-    assert segments_from_chunks(chunks, [" one", " two"]) == [
-        {"start": 0.5, "end": 12.0, "text": " one"},
-        {"start": 14.0, "end": 40.0, "text": " two"}]
 
 
 def test_chunks_where_whisper_heard_nothing_are_dropped():

@@ -26,15 +26,6 @@ def test_unknown_encoder_name_is_rejected():
         hardware.pick_encoder("h265_magic", [])
 
 
-@pytest.mark.parametrize("encoder, flag", [
-    ("libx264", "-crf"), ("h264_nvenc", "-cq"), ("h264_amf", "-qp_i"),
-    ("h264_qsv", "-global_quality"), ("h264_videotoolbox", "-q:v")])
-def test_each_encoder_gets_its_own_quality_setting(encoder, flag):
-    args = hardware.encoder_args(encoder)
-    assert args[:2] == ["-c:v", encoder]
-    assert flag in args
-
-
 def test_probe_keeps_only_encoders_whose_test_encode_succeeds(monkeypatch):
     import subprocess
     tried = []

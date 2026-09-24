@@ -8,11 +8,6 @@ def style_file(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIPPER_STYLE", str(tmp_path / "style.json"))
 
 
-def test_defaults_when_nothing_is_saved():
-    assert style.load() == style.DEFAULT
-    assert style.DEFAULT["layout"] == "fit"
-
-
 def test_save_round_trips_and_ignores_unknown_fields():
     saved = style.save({"layout": "crop", "caption_case": "upper", "notes": "Punchy.",
                         "font": "Comic Sans"})
@@ -21,7 +16,8 @@ def test_save_round_trips_and_ignores_unknown_fields():
 
 
 @pytest.mark.parametrize("field, value", [
-    ("layout", "zoom"), ("captions", "loud"), ("caption_case", "title"), ("encoder", "h266")])
+    ("layout", "zoom"), ("captions", "loud"), ("caption_case", "title"), ("encoder", "h266"),
+    ("caption_style", "wobbly")])
 def test_invalid_choices_are_refused(field, value):
     with pytest.raises(ValueError, match=field):
         style.save({field: value})

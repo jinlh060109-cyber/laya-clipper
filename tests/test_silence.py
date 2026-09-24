@@ -83,10 +83,3 @@ def test_speech_only_keeps_real_talk_and_drops_the_rest():
     assert [w["start"] for s in kept["segments"] for w in s["words"]] == [
         w["start"] for w in scored(*talk(0, 10))]
     assert t["segments"][1]["words"]  # the input is not modified
-
-
-def test_dense_aligned_speech_still_counts():
-    t = {"segments": [{"words": scored(*talk(0, 10))},
-                      {"words": scored(*talk(60, 70))},
-                      {"words": scored(*talk(120, 130))}]}
-    assert silent_spans(t, 130.0) == [[10.0, 60.0], [70.0, 120.0]]

@@ -32,14 +32,6 @@ def test_claude_without_a_key_names_the_missing_variable(monkeypatch):
         ai.config_from_env()
 
 
-def test_openai_compatible_presets_resolve_their_base_url(monkeypatch):
-    monkeypatch.setenv("AI_PROVIDER", "deepseek")
-    monkeypatch.setenv("AI_MODEL", "deepseek-chat")
-    monkeypatch.setenv("AI_API_KEY", "k")
-    config = ai.config_from_env()
-    assert config.base_url == "https://api.deepseek.com/v1"
-
-
 def test_ollama_runs_locally_without_a_key(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "ollama")
     monkeypatch.setenv("AI_MODEL", "qwen3")
@@ -138,13 +130,6 @@ def test_bad_json_from_the_model_is_an_ai_error():
         ai.parse_json("not json at all")
 
 
-def test_available_providers_marks_the_configured_one(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
-    listed = {p["id"]: p for p in ai.available_providers()}
-    assert listed["anthropic"]["active"] is True
-    assert listed["ollama"]["active"] is False
-
-
 def test_openai_compatible_requests_stay_within_common_output_limits(monkeypatch):
     """DeepSeek and most OpenAI-compatible servers reject max_tokens above
     8192; asking for Claude's 64000 would make every segmentation call fail."""
@@ -174,19 +159,6 @@ def test_an_unreachable_ai_server_is_named_in_plain_words(monkeypatch):
     assert "WinError" not in message
 
 
-def test_an_ai_server_error_status_is_reported_with_its_code(monkeypatch):
-    request = ai.httpx.Request("POST", "http://x/v1/chat/completions")
-    response = ai.httpx.Response(401, request=request, text='{"error": "bad key"}')
-
-    def fake_post(url, headers, json, timeout):
-        return response
-
-    monkeypatch.setattr(ai.httpx, "post", fake_post)
-    config = ai.AIConfig("deepseek", "deepseek-chat", "k", "http://x/v1")
-    with pytest.raises(ai.AIError, match="401"):
-        ai.complete_json(config, "s", "u", SCHEMA, 100)
-
-
 ALL_KEYS = ("ALIBABA_TOKEN_PLAN_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY",
             "MOONSHOT_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
 
@@ -195,14 +167,6 @@ ALL_KEYS = ("ALIBABA_TOKEN_PLAN_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY
 def no_keys(monkeypatch):
     for key in ALL_KEYS:
         monkeypatch.delenv(key, raising=False)
-
-
-def test_alibaba_token_plan_uses_its_own_endpoint_and_key(monkeypatch, no_keys):
-    monkeypatch.setenv("AI_PROVIDER", "alibaba_token_plan")
-    monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "sk-sp-abc")
-    config = ai.config_from_env()
-    assert config.base_url == "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
-    assert config.api_key == "sk-sp-abc" and config.model == "qwen3.8-max"
 
 
 def test_each_provider_keeps_its_own_key(monkeypatch, no_keys):

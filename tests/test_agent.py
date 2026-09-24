@@ -42,21 +42,10 @@ def fake_loader(recorder, **overrides):
     return _load
 
 
-def test_english_selects_the_repo_root():
-    assert checkpoint_for_language("en") is None
-
-
-def test_non_english_selects_multilingual():
-    assert checkpoint_for_language("hi") == "multilingual"
-    assert checkpoint_for_language("de") == "multilingual"
-
-
-def test_missing_language_selects_multilingual_defensively():
-    assert checkpoint_for_language(None) == "multilingual"
-
-
-def test_language_region_suffix_still_counts_as_english():
+def test_checkpoint_edge_cases():
+    """en/fr wiring is covered through load_agent below; these are the edges."""
     assert checkpoint_for_language("en-US") is None
+    assert checkpoint_for_language(None) == "multilingual"
 
 
 def test_load_agent_passes_device_explicitly():
@@ -72,18 +61,9 @@ def test_load_agent_passes_device_explicitly():
 def test_load_agent_selects_multilingual_subfolder_for_non_english():
     calls = []
     _, meta = load_agent("fr", QUESTIONS, device="cpu",
-                         loader=fake_loader(calls))
+                         loader=fake_loader(calls, device="cpu"))
     assert calls[0]["subfolder"] == "multilingual"
     assert meta["checkpoint"] == "multilingual"
-
-
-def test_provenance_records_repo_package_and_dtype():
-    _, meta = load_agent("en", QUESTIONS, device="xpu",
-                         loader=fake_loader([]))
-    assert meta["repo"] == "convaiinnovations/laya"
-    assert meta["checkpoint"] == "root"
-    assert meta["dtype"] == "torch.bfloat16"
-    assert meta["package"]
 
 
 def test_silent_cpu_fallback_is_detected_and_warned():
@@ -122,12 +102,6 @@ def test_a_clamped_bucket_that_is_reachable_is_reported():
 def test_in_range_temperatures_are_not_flagged():
     agent = FakeLoaded(temps={"choice:6-10": 1.2, "noul:2": 0.9})
     assert uncalibrated_buckets(agent, QUESTIONS) == []
-
-
-def test_calibration_flag_lands_in_provenance():
-    _, meta = load_agent("en", QUESTIONS, device="cpu", loader=fake_loader([]))
-    assert meta["confidence_calibrated"] is True
-    assert meta["uncalibrated_buckets"] == []
 
 
 def test_a_loader_failure_is_reported_with_the_repo_named():

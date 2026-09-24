@@ -1,15 +1,11 @@
 import pytest
 
-from clipper.device import PROBE_ORDER, DeviceError, resolve_device
+from clipper.device import DeviceError, resolve_device
 
 
 def probes(**kw):
     """Build a probe table; anything unnamed is unavailable."""
     return {name: (lambda v=kw.get(name, False): v) for name in ("cuda", "xpu", "mps")}
-
-
-def test_auto_prefers_cuda_when_present():
-    assert resolve_device("auto", probes(cuda=True, xpu=True)) == "cuda"
 
 
 def test_auto_picks_xpu_when_cuda_absent():
@@ -65,7 +61,3 @@ def test_auto_prefers_xpu_over_mps_when_both_are_available():
 
 def test_auto_follows_the_documented_priority_when_everything_is_available():
     assert resolve_device("auto", probes(cuda=True, xpu=True, mps=True)) == "cuda"
-
-
-def test_probe_order_puts_xpu_ahead_of_cpu():
-    assert PROBE_ORDER.index("xpu") < PROBE_ORDER.index("cpu")

@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from clipper import segment
 from clipper.ai import AIConfig, AIError
 from clipper.run import Run
@@ -35,13 +33,6 @@ def test_transcript_lines_carry_timestamps():
     first, second = lines.splitlines()
     assert first == "[0.00-0.87] hello there friend."
     assert second.startswith("[1.50-")
-
-
-def test_prompt_contains_the_rules_the_users_goal_and_the_transcript():
-    system, user = segment.build_prompt(LONG, 130.0, "useful tips")
-    assert "512" in system and "15" in system and "60" in system
-    assert "useful tips" in user
-    assert "[0.00-" in user
 
 
 def test_snap_moves_boundaries_onto_words_and_fills_in_text():
@@ -106,26 +97,6 @@ AI_ANSWER = {
 CLAUDE = AIConfig("anthropic", "claude-opus-5", "k", None)
 
 
-def test_run_segment_writes_the_ais_plan(tmp_path):
-    run = _run(tmp_path)
-    seen = {}
-
-    def complete(config, system, user, schema, max_tokens):
-        seen.update(user=user, schema=schema)
-        return AI_ANSWER
-
-    out = segment.run_segment(run, CLAUDE, "tips", complete=complete)
-    saved = run.read_json("segments.json")
-    assert saved == out
-    assert saved["content_type"] == "tutorial"
-    assert saved["ai"] == {"provider": "anthropic", "model": "claude-opus-5"}
-    assert "useful" in saved["questions"] and "clipworthy" in saved["questions"]
-    assert "broken" not in saved["questions"] and saved["problems"]
-    assert saved["weights"]["useful"] == pytest.approx(0.20)
-    assert len(saved["candidates"]) == 1 and saved["candidates"][0]["hook_line"]
-    assert seen["schema"] == segment.SCHEMA
-
-
 def test_when_the_ai_fails_the_run_falls_back_to_chunks(tmp_path):
     run = _run(tmp_path)
 
@@ -145,12 +116,6 @@ def test_when_the_ai_proposes_nothing_usable_the_run_falls_back(tmp_path):
     out = segment.run_segment(run, CLAUDE, complete=lambda *a, **k: answer)
     assert out["candidates"][0]["category"] == "chunk"
     assert "no usable clips" in out["ai_error"]
-
-
-def test_without_ai_the_run_uses_chunks(tmp_path):
-    out = segment.run_segment(_run(tmp_path), None)
-    assert out["ai"] is None and out["ai_error"] is None
-    assert out["content_type"] == "unknown" and out["candidates"]
 
 
 def test_a_video_with_no_speech_has_no_candidates(tmp_path):

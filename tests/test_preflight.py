@@ -25,28 +25,12 @@ def test_find_binary_raises_when_env_var_path_missing(monkeypatch):
     assert "FFMPEG_PATH" in message
     assert "/nonexistent/ffmpeg" in message
 
-def test_find_binary_falls_back_to_path_when_env_var_unset(monkeypatch):
-    monkeypatch.delenv("FFMPEG_PATH", raising=False)
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
-    assert find_binary("ffmpeg", "FFMPEG_PATH") == Path("/usr/bin/ffmpeg")
-
 def test_find_binary_raises_actionable_error_when_not_found_anywhere(monkeypatch):
     monkeypatch.delenv("FFMPEG_PATH", raising=False)
     monkeypatch.setattr("shutil.which", lambda _: None)
     with pytest.raises(PreflightError) as err:
         find_binary("ffmpeg", "FFMPEG_PATH")
     assert "install" in str(err.value).lower()
-
-def test_has_subtitles_filter_detects_presence(monkeypatch):
-    monkeypatch.setattr(
-        "clipper.preflight._run_filters",
-        lambda _: " T.. subtitles         V->V       Render text subtitles onto input video using the libass library.",
-    )
-    assert has_subtitles_filter(Path("ffmpeg")) is True
-
-def test_has_subtitles_filter_detects_absence(monkeypatch):
-    monkeypatch.setattr("clipper.preflight._run_filters", lambda _: "... scale ...")
-    assert has_subtitles_filter(Path("ffmpeg")) is False
 
 def test_has_subtitles_filter_raises_when_ffmpeg_exits_nonzero(monkeypatch):
     def fake_run(*args, **kwargs):

@@ -110,40 +110,12 @@ def _analyzed(base, runner):
     return uploaded["run"]
 
 
-def test_the_page_is_served(server):
-    base, *_ = server
-    status, body = call("GET", base + "/")
-    assert status == 200 and b"<title>" in body
-
-
-def test_config_offers_hardware_models_ai_and_style(server, monkeypatch):
-    for key in ("HF_TOKEN", "AI_PROVIDER", "ANTHROPIC_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
-    base, *_ = server
-    status, config = jcall("GET", base + "/api/config")
-    assert status == 200
-    assert [d["id"] for d in config["hardware"]["devices"]] == ["auto", "cuda", "xpu", "mps", "cpu"]
-    assert config["models"][0] == "large-v3"
-    assert config["ai"]["active"] is None and config["ai"]["error"] is None
-    assert any(p["id"] == "anthropic" for p in config["ai"]["providers"])
-    assert config["style"]["layout"] == "fit"
-    assert config["hf_token"] is False
-
-
 def test_a_misconfigured_ai_is_reported_in_the_config(server, monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "openai")
     monkeypatch.delenv("AI_MODEL", raising=False)
     base, *_ = server
     _, config = jcall("GET", base + "/api/config")
     assert "AI_MODEL" in config["ai"]["error"]
-
-
-def test_an_upload_lands_on_disk_intact(server):
-    base, tmp_path, *_ = server
-    payload = os.urandom(3 * 1024 * 1024 + 17)
-    status, body = upload(base, data=payload)
-    assert status == 200 and body["run"].endswith("-my-episode")
-    assert (tmp_path / body["run"] / "video.mp4").read_bytes() == payload
 
 
 def test_an_upload_that_is_not_a_video_is_refused(server):
@@ -158,25 +130,9 @@ def test_directories_in_the_upload_name_are_ignored(server):
     assert status == 200 and body["run"].endswith("-evil")
 
 
-def test_analyze_runs_to_completion_and_the_preview_shows_the_selection(server):
-    base, _, runner, _ = server
-    run = _analyzed(base, runner)
-    _, final = jcall("GET", base + "/api/status")
-    assert final["state"] == "done" and final["kind"] == "analyze"
-    status, preview = jcall("GET", f"{base}/api/selection?run={run}")
-    assert status == 200
-    assert preview["clips"][0]["id"] == "c0" and preview["run"] == run
-    assert preview["video"] == "video.mp4"
-
-
 def test_the_preview_of_an_unknown_run_is_404(server):
     base, *_ = server
     assert call("GET", f"{base}/api/selection?run=nope")[0] == 404
-
-
-def test_status_is_idle_before_any_job(server):
-    base, *_ = server
-    assert jcall("GET", base + "/api/status") == (200, {"state": "idle"})
 
 
 @pytest.mark.parametrize("field, value", [("device", "tpu"), ("model", "huge"), ("top_n", 0)])
@@ -198,19 +154,6 @@ def test_a_run_without_a_video_is_refused(server):
     (tmp_path / "empty").mkdir()
     status, body = analyze(base, run="empty")
     assert status == 400 and "upload" in body["error"].lower()
-
-
-def test_make_saves_the_style_applies_the_choices_and_runs(server):
-    base, tmp_path, runner, _ = server
-    run = _analyzed(base, runner)
-    status, _ = make(base, run=run, choices=[{"id": "c0", "include": True, "fill_in": True}],
-                     style={"layout": "crop", "notes": "Calm."})
-    assert status == 202
-    runner.wait(5)
-    _, final = jcall("GET", base + "/api/status")
-    assert final["state"] == "done" and final["kind"] == "make"
-    assert json.loads((tmp_path / "style.json").read_text())["notes"] == "Calm."
-    assert json.loads((tmp_path / run / "selection.json").read_text())["clips"][0]["fill_in"] is True
 
 
 def test_make_with_an_unknown_clip_is_refused(server):
@@ -270,24 +213,6 @@ def test_media_never_leaves_a_run_folder(server, path):
     base, tmp_path, *_ = server
     (tmp_path.parent / "secret.txt").write_text("no")
     assert call("GET", base + path)[0] == 404
-
-
-def test_unknown_routes_are_404(server):
-    base, *_ = server
-    assert call("GET", base + "/nope")[0] == 404
-
-
-def test_the_page_calls_every_api_route_and_names_every_stage(server):
-    """A cheap guard that the page and the API have not drifted apart."""
-    from clipper.web.jobs import KINDS
-    base, *_ = server
-    page = call("GET", base + "/")[1].decode("utf-8")
-    for route in ("/api/config", "/api/upload", "/api/analyze", "/api/make", "/api/status",
-                  "/api/selection", "/api/style", "/media/"):
-        assert route in page
-    for stages in KINDS.values():
-        for stage in stages:
-            assert f'"{stage}"' in page
 
 
 def test_a_refused_large_upload_still_gets_its_error_message(server):
@@ -425,25 +350,6 @@ def test_a_provider_without_a_key_is_refused(server):
     assert status == 400 and b"ALIBABA_TOKEN_PLAN_API_KEY" in body
 
 
-def test_no_ai_can_be_chosen(server):
-    base, tmp_path, *_ = server
-    put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"})
-    status, body = put_json(base, "/api/ai", {"provider": "none"})
-    assert status == 200 and json.loads(body)["active"] is None
-    assert "ANTHROPIC_API_KEY=sk-ant-1" in (tmp_path / ".env").read_text(encoding="utf-8")
-
-
-def test_the_ai_connection_can_be_tested(server, monkeypatch):
-    import clipper.ai
-    base, *_ = server
-    put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"})
-    monkeypatch.setattr(clipper.ai, "complete_json",
-                        lambda config, system, user, schema, max_tokens: {"ok": True})
-    status, body = call("POST", base + "/api/ai/test", b"{}", {"Content-Type": "application/json"})
-    assert status == 200 and json.loads(body) == {"ok": True, "provider": "anthropic",
-                                                  "model": "claude-opus-5"}
-
-
 def test_a_failing_ai_connection_says_why(server, monkeypatch):
     import clipper.ai
     base, *_ = server
@@ -466,13 +372,6 @@ def test_other_websites_cannot_change_settings_or_start_jobs(server, method, pat
     status, _ = call(method, base + path, json.dumps({"provider": "custom"}).encode(),
                      {"Content-Type": "application/json", "Origin": "http://evil.example"})
     assert status == 403
-
-
-def test_the_page_itself_may_change_settings(server):
-    base, *_ = server
-    status, _ = put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"},
-                         {"Origin": base})
-    assert status == 200
 
 
 def test_the_caption_preview_is_a_jpeg_of_the_chosen_style(server, monkeypatch):

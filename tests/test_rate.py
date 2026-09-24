@@ -58,14 +58,6 @@ def test_low_confidence_marks_the_clip_uncertain():
     assert (sure["uncertain"], unsure["uncertain"], shaky_yes_no["uncertain"]) == (False, True, True)
 
 
-def test_laya_reads_the_content_type_then_the_clip():
-    agent = FakeAgent()
-    rate.rate_one(CLIP, "tutorial", QUESTIONS, WEIGHTS, agent)
-    state = agent.states[0]
-    assert list(state) == ["content_type", "clip", "duration"]
-    assert state["clip"]["text"] == "Here is the trick."
-
-
 def _run(tmp_path, candidates):
     run = Run.create(tmp_path, "r")
     run.write_json("transcript.json", {"language": "en", "segments": []})

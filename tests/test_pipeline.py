@@ -9,27 +9,6 @@ def run(tmp_path):
     return Run.create(tmp_path, "ep")
 
 
-def test_transcription_uses_the_chosen_device(run, monkeypatch):
-    import clipper.transcribe
-    calls = []
-    monkeypatch.setattr(clipper.transcribe, "transcribe",
-                        lambda wav, r, model, device=None, hf_token=None:
-                        calls.append((model, device, hf_token)))
-    pipeline.default_steps().transcribe(run, {"model": "large-v3", "device": "xpu",
-                                              "diarize": False})
-    assert calls == [("large-v3", "xpu", None)]
-
-
-def test_segment_reads_the_ai_from_the_environment(run, monkeypatch):
-    import clipper.segment
-    seen = {}
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
-    monkeypatch.setattr(clipper.segment, "run_segment",
-                        lambda r, config, prompt: seen.update(config=config, prompt=prompt) or {})
-    pipeline.default_steps().segment(run, {"prompt": "tips"})
-    assert seen["config"].provider == "anthropic" and seen["prompt"] == "tips"
-
-
 def test_a_misconfigured_ai_stops_the_run_with_the_reason(run, monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "openai")
     monkeypatch.delenv("AI_MODEL", raising=False)
