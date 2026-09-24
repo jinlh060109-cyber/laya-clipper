@@ -49,13 +49,26 @@ def gated_steps(gate):
                  edit=ok([{"id": "c0", "final": "clips/01-a-tip/final.mp4"}]))
 
 
+@pytest.fixture(autouse=True)
+def restore_environment():
+    """Saving AI settings writes os.environ; put it back after each test."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
 @pytest.fixture
 def server(tmp_path, monkeypatch):
     monkeypatch.setenv("CLIPPER_STYLE", str(tmp_path / "style.json"))
+    for key in ("AI_PROVIDER", "AI_MODEL", "AI_API_KEY", "AI_BASE_URL", "ANTHROPIC_API_KEY",
+                "ALIBABA_TOKEN_PLAN_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
     gate = threading.Event()
     gate.set()
     runner = JobRunner(gated_steps(gate))
-    srv = make_server(tmp_path, port=0, runner=runner, hardware=lambda: HARDWARE)
+    srv = make_server(tmp_path, port=0, runner=runner, hardware=lambda: HARDWARE,
+                      env_path=tmp_path / ".env")
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_address[1]}", tmp_path, runner, gate
     gate.set()
@@ -374,3 +387,113 @@ def test_a_refused_make_leaves_the_saved_style_alone(server):
     run = _analyzed(base, runner)
     make(base, run=run, choices=[{"id": "c9", "include": True}], style={"notes": "Changed."})
     assert not (tmp_path / "style.json").exists()
+
+
+def put_json(base, path, body, headers=None):
+    return call("PUT", base + path, json.dumps(body).encode(),
+                {"Content-Type": "application/json", **(headers or {})})
+
+
+def test_choosing_an_ai_provider_saves_it_and_never_echoes_the_key(server):
+    base, tmp_path, *_ = server
+    status, body = put_json(base, "/api/ai", {"provider": "alibaba_token_plan",
+                                              "model": "qwen3.7-plus", "api_key": "sk-sp-secret"})
+    assert status == 200 and b"sk-sp-secret" not in body
+    saved = json.loads(body)
+    assert saved["active"] == {"provider": "alibaba_token_plan", "model": "qwen3.7-plus"}
+    env = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "ALIBABA_TOKEN_PLAN_API_KEY=sk-sp-secret" in env and "AI_PROVIDER=alibaba_token_plan" in env
+    config = jcall("GET", base + "/api/config")[1]
+    assert b"sk-sp-secret" not in json.dumps(config).encode()
+    token_plan = next(p for p in config["ai"]["providers"] if p["id"] == "alibaba_token_plan")
+    assert token_plan["has_key"] and token_plan["active"]
+
+
+def test_switching_provider_keeps_the_other_providers_key(server):
+    base, tmp_path, *_ = server
+    put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"})
+    put_json(base, "/api/ai", {"provider": "alibaba_token_plan", "api_key": "sk-sp-2"})
+    status, body = put_json(base, "/api/ai", {"provider": "anthropic"})
+    assert status == 200 and json.loads(body)["active"]["provider"] == "anthropic"
+    env = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "ANTHROPIC_API_KEY=sk-ant-1" in env and "ALIBABA_TOKEN_PLAN_API_KEY=sk-sp-2" in env
+
+
+def test_a_provider_without_a_key_is_refused(server):
+    base, *_ = server
+    status, body = put_json(base, "/api/ai", {"provider": "alibaba_token_plan"})
+    assert status == 400 and b"ALIBABA_TOKEN_PLAN_API_KEY" in body
+
+
+def test_no_ai_can_be_chosen(server):
+    base, tmp_path, *_ = server
+    put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"})
+    status, body = put_json(base, "/api/ai", {"provider": "none"})
+    assert status == 200 and json.loads(body)["active"] is None
+    assert "ANTHROPIC_API_KEY=sk-ant-1" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+
+def test_the_ai_connection_can_be_tested(server, monkeypatch):
+    import clipper.ai
+    base, *_ = server
+    put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"})
+    monkeypatch.setattr(clipper.ai, "complete_json",
+                        lambda config, system, user, schema, max_tokens: {"ok": True})
+    status, body = call("POST", base + "/api/ai/test", b"{}", {"Content-Type": "application/json"})
+    assert status == 200 and json.loads(body) == {"ok": True, "provider": "anthropic",
+                                                  "model": "claude-opus-5"}
+
+
+def test_a_failing_ai_connection_says_why(server, monkeypatch):
+    import clipper.ai
+    base, *_ = server
+    put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"})
+
+    def fail(*a, **k):
+        raise clipper.ai.AIError("Claude rejected the API key.")
+
+    monkeypatch.setattr(clipper.ai, "complete_json", fail)
+    status, body = call("POST", base + "/api/ai/test", b"{}", {"Content-Type": "application/json"})
+    assert status == 400 and b"rejected the API key" in body
+
+
+@pytest.mark.parametrize("method, path", [("PUT", "/api/ai"), ("POST", "/api/analyze"),
+                                          ("POST", "/api/make"), ("PUT", "/api/style")])
+def test_other_websites_cannot_change_settings_or_start_jobs(server, method, path):
+    """A page on any site could otherwise post to this local server, e.g. to
+    point the AI at its own address and receive the user's key and transcripts."""
+    base, *_ = server
+    status, _ = call(method, base + path, json.dumps({"provider": "custom"}).encode(),
+                     {"Content-Type": "application/json", "Origin": "http://evil.example"})
+    assert status == 403
+
+
+def test_the_page_itself_may_change_settings(server):
+    base, *_ = server
+    status, _ = put_json(base, "/api/ai", {"provider": "anthropic", "api_key": "sk-ant-1"},
+                         {"Origin": base})
+    assert status == 200
+
+
+def test_the_caption_preview_is_a_jpeg_of_the_chosen_style(server, monkeypatch):
+    import clipper.edit
+    base, _, runner, _ = server
+    run = _analyzed(base, runner)
+    seen = {}
+
+    def fake(run_, clip_id, style, ffmpeg=None):
+        seen.update(clip=clip_id, style=style)
+        return b"\xff\xd8fake"
+
+    monkeypatch.setattr(clipper.edit, "preview_frame", fake)
+    status, body = call("GET", f"{base}/api/preview?run={run}&clip=c0&caption_style=neon"
+                               f"&layout=crop&caption_case=upper")
+    assert status == 200 and body == b"\xff\xd8fake"
+    assert seen["clip"] == "c0" and seen["style"]["caption_style"] == "neon"
+    assert seen["style"]["layout"] == "crop" and seen["style"]["caption_case"] == "upper"
+
+
+def test_a_preview_with_a_bad_style_is_refused(server):
+    base, _, runner, _ = server
+    run = _analyzed(base, runner)
+    assert call("GET", f"{base}/api/preview?run={run}&clip=c0&caption_style=wobbly")[0] == 400

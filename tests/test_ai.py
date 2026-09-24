@@ -185,3 +185,50 @@ def test_an_ai_server_error_status_is_reported_with_its_code(monkeypatch):
     config = ai.AIConfig("deepseek", "deepseek-chat", "k", "http://x/v1")
     with pytest.raises(ai.AIError, match="401"):
         ai.complete_json(config, "s", "u", SCHEMA, 100)
+
+
+ALL_KEYS = ("ALIBABA_TOKEN_PLAN_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY",
+            "MOONSHOT_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY")
+
+
+@pytest.fixture
+def no_keys(monkeypatch):
+    for key in ALL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_alibaba_token_plan_uses_its_own_endpoint_and_key(monkeypatch, no_keys):
+    monkeypatch.setenv("AI_PROVIDER", "alibaba_token_plan")
+    monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "sk-sp-abc")
+    config = ai.config_from_env()
+    assert config.base_url == "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    assert config.api_key == "sk-sp-abc" and config.model == "qwen3.8-max"
+
+
+def test_each_provider_keeps_its_own_key(monkeypatch, no_keys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "sk-sp-y")
+    assert ai.config_for("anthropic").api_key == "sk-ant-x"
+    assert ai.config_for("alibaba_token_plan", "kimi-k2.6").api_key == "sk-sp-y"
+    assert ai.config_for("alibaba_token_plan", "kimi-k2.6").model == "kimi-k2.6"
+
+
+def test_a_provider_without_its_key_names_the_variable(monkeypatch, no_keys):
+    with pytest.raises(ValueError, match="ALIBABA_TOKEN_PLAN_API_KEY"):
+        ai.config_for("alibaba_token_plan")
+
+
+def test_the_old_shared_key_still_works(monkeypatch, no_keys):
+    monkeypatch.setenv("AI_API_KEY", "legacy")
+    assert ai.config_for("deepseek", "deepseek-chat").api_key == "legacy"
+
+
+def test_the_provider_list_says_which_have_a_key_and_never_shows_it(monkeypatch, no_keys):
+    monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "sk-sp-secret")
+    monkeypatch.setenv("AI_PROVIDER", "alibaba_token_plan")
+    listed = {p["id"]: p for p in ai.available_providers()}
+    token_plan = listed["alibaba_token_plan"]
+    assert token_plan["has_key"] and token_plan["active"]
+    assert "qwen3.8-max" in token_plan["models"] and token_plan["key_env"] == "ALIBABA_TOKEN_PLAN_API_KEY"
+    assert not listed["deepseek"]["has_key"]
+    assert "sk-sp-secret" not in str(listed)

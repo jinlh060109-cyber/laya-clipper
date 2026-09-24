@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
-from clipper import ai, style
+from clipper import ai, envfile, style
+from clipper.captions import CAPTION_STYLES
 from clipper.run import Run, default_run_name
 from clipper.selection import apply_choices
 from clipper.web.jobs import JobBusy, JobRunner
@@ -25,6 +26,7 @@ MEDIA_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".mkv": "video/x-
                ".md": "text/markdown; charset=utf-8", ".json": "application/json",
                ".srt": "text/plain; charset=utf-8", ".jpg": "image/jpeg"}
 INDEX = Path(__file__).with_name("index.html")
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
 class NotFound(LookupError):
@@ -41,8 +43,10 @@ class App:
     """Request logic, kept apart from HTTP plumbing."""
 
     def __init__(self, runs_dir: Path, runner: JobRunner,
-                 hardware: Callable[[], dict] = _hardware_probe) -> None:
+                 hardware: Callable[[], dict] = _hardware_probe,
+                 env_path: Path = envfile.ENV_PATH) -> None:
         self.runs_dir = runs_dir
+        self.env_path = env_path
         self.runner = runner
         self._hardware_probe = hardware
         self._hardware: dict | None = None
@@ -53,15 +57,91 @@ class App:
             self._hardware = self._hardware_probe()
         return self._hardware
 
-    def config(self) -> dict:
+    def ai_state(self) -> dict:
         try:
             active, error = ai.config_from_env(), None
         except ValueError as exc:
             active, error = None, str(exc)
-        return {"hardware": self.hardware(), "models": MODELS,
-                "ai": {"providers": ai.available_providers(),
-                       "active": active.describe() if active else None, "error": error},
+        return {"providers": ai.available_providers(),
+                "active": active.describe() if active else None, "error": error}
+
+    def config(self) -> dict:
+        return {"hardware": self.hardware(), "models": MODELS, "ai": self.ai_state(),
+                "caption_styles": [{"id": sid, "label": look["label"]}
+                                   for sid, look in CAPTION_STYLES.items()],
                 "hf_token": bool(os.environ.get("HF_TOKEN")), "style": style.load()}
+
+    def save_ai(self, body: dict) -> dict:
+        """Choose the AI provider and model, and optionally store its key.
+
+        Checked before anything is written: a provider that still lacks a
+        key or model is refused and the .env file is left as it was."""
+        provider = str(body.get("provider") or "").strip().lower()
+        if provider == ai.NO_AI:
+            envfile.update({"AI_PROVIDER": ai.NO_AI}, self.env_path)
+            return self.ai_state()
+        if provider not in ai.PROVIDERS:
+            raise ValueError(f"Unknown AI provider {provider!r}. "
+                             f"Valid: {', '.join(ai.PROVIDERS)}, {ai.NO_AI}.")
+        spec = ai.PROVIDERS[provider]
+        values: dict[str, str | None] = {
+            "AI_PROVIDER": provider,
+            "AI_MODEL": str(body.get("model") or "").strip() or None,
+            # A preset keeps its own address unless one is given explicitly.
+            "AI_BASE_URL": str(body.get("base_url") or "").strip() or None,
+        }
+        key = str(body.get("api_key") or "").strip()
+        if key:
+            values[spec["key_env"] or "AI_API_KEY"] = key
+        before = {name: os.environ.get(name) for name in values}
+        try:
+            for name, value in values.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            ai.config_for(provider)
+        finally:
+            for name, value in before.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        envfile.update(values, self.env_path)
+        return self.ai_state()
+
+    def test_ai(self) -> dict:
+        """One tiny request to the chosen AI, so a bad key shows up now and
+        not halfway through an analysis."""
+        config = ai.config_from_env()
+        if config is None:
+            raise ValueError("No AI is chosen. Pick a provider first.")
+        schema = {"type": "object", "properties": {"ok": {"type": "boolean"}},
+                  "required": ["ok"], "additionalProperties": False}
+        try:
+            ai.complete_json(config, "You check that a connection works.",
+                             'Reply with {"ok": true}.', schema, 64)
+        except ai.AIError as exc:
+            raise ValueError(str(exc)) from exc
+        return {"ok": True, **config.describe()}
+
+    def preview(self, query: dict[str, list[str]]) -> bytes:
+        """One frame of a clip in the style being edited, before it is saved."""
+        from clipper import edit
+        from clipper.preflight import PreflightError
+
+        run = Run(self.run_dir((query.get("run") or [""])[0]))
+        if not run.exists("selection.json"):
+            raise ValueError("Analyze this video first; there is no clip selection yet.")
+        overrides: dict = {key: values[0] for key, values in query.items()
+                           if key in style.DEFAULT and key not in ("notes", "vertical")}
+        if "vertical" in query:
+            overrides["vertical"] = query["vertical"][0].lower() in ("1", "true", "yes", "on")
+        chosen = style.validate({**style.load(), **overrides})
+        try:
+            return edit.preview_frame(run, (query.get("clip") or [""])[0], chosen)
+        except (RuntimeError, PreflightError, OSError) as exc:
+            raise ValueError(str(exc)) from exc
 
     def run_dir(self, name: str) -> Path:
         run_dir = self.runs_dir / name
@@ -256,6 +336,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(200, app.config())
                 elif url.path == "/api/status":
                     self._json(200, app.runner.status())
+                elif url.path == "/api/preview":
+                    try:
+                        image = app.preview(parse_qs(url.query))
+                    except ValueError as error:
+                        self._json(400, {"error": str(error)})
+                    else:
+                        self._send(200, image, "image/jpeg")
                 elif url.path == "/api/selection":
                     self._json(200, app.selection(parse_qs(url.query).get("run", [""])[0]))
                 elif url.path.startswith("/media/"):
@@ -281,11 +368,26 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             self.close_connection = True
             self._json(status, {"error": message})
 
+        def _foreign(self) -> bool:
+            """True for a request sent by a page from another site (or from a
+            rebound DNS name): only this page may change settings or start jobs."""
+            origin = self.headers.get("Origin")
+            if origin is None:
+                return False  # not a browser page: curl, scripts, the CLI
+            parsed = urlparse(origin)
+            host = (self.headers.get("Host") or "").lower()
+            return (parsed.hostname not in LOOPBACK or parsed.netloc.lower() != host)
+
         def do_PUT(self) -> None:
             url = urlparse(self.path)
-            if url.path == "/api/style":
+            if self._foreign():
+                self._refuse(403, "Only the Clipper page itself may do this.",
+                             _CountingReader(self.rfile))
+                return
+            saves = {"/api/style": style.save, "/api/ai": app.save_ai}
+            if url.path in saves:
                 try:
-                    self._json(200, style.save(self._body()))
+                    self._json(200, saves[url.path](self._body()))
                 except (ValueError, json.JSONDecodeError) as error:
                     self._json(400, {"error": str(error)})
                 return
@@ -312,8 +414,20 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             self._json(200, {"run": run})
 
         def do_POST(self) -> None:
+            if self._foreign():
+                self._refuse(403, "Only the Clipper page itself may do this.",
+                             _CountingReader(self.rfile))
+                return
+            path = urlparse(self.path).path
+            if path == "/api/ai/test":
+                try:
+                    self._body()
+                    self._json(200, app.test_ai())
+                except (ValueError, json.JSONDecodeError) as error:
+                    self._json(400, {"error": str(error)})
+                return
             routes = {"/api/analyze": app.analyze, "/api/make": app.make}
-            handler = routes.get(urlparse(self.path).path)
+            handler = routes.get(path)
             if handler is None:
                 self._json(404, {"error": "Not found."})
                 return
@@ -339,7 +453,9 @@ class _Server(ThreadingHTTPServer):
 
 
 def make_server(runs_dir: Path, port: int = 8765, runner: JobRunner | None = None,
-                hardware: Callable[[], dict] | None = None) -> ThreadingHTTPServer:
+                hardware: Callable[[], dict] | None = None,
+                env_path: Path | None = None) -> ThreadingHTTPServer:
     runs_dir.mkdir(parents=True, exist_ok=True)
-    app = App(runs_dir, runner or JobRunner(), hardware or _hardware_probe)
+    app = App(runs_dir, runner or JobRunner(), hardware or _hardware_probe,
+              env_path or envfile.ENV_PATH)
     return _Server(("127.0.0.1", port), make_handler(app))

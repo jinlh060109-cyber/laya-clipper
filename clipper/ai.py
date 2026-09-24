@@ -1,12 +1,13 @@
 """The AI that reads transcripts: Claude by default, or any OpenAI-compatible
-server (DeepSeek, Kimi, OpenRouter, OpenAI, a local Ollama).
+server (Alibaba Cloud Token Plan, Model Studio, DeepSeek, Kimi, OpenRouter,
+OpenAI, a local Ollama, or your own).
 
-Configured from the environment (.env):
-  ANTHROPIC_API_KEY          alone selects Claude (claude-opus-5)
-  AI_PROVIDER                anthropic | openai | deepseek | kimi | openrouter | ollama | custom
-  AI_MODEL                   model name (required except for Claude)
-  AI_API_KEY                 key for the OpenAI-compatible providers (not needed for ollama)
-  AI_BASE_URL                endpoint for `custom`, or to override a preset
+Configured from the environment (.env), which the web page's AI panel writes:
+  AI_PROVIDER      one of PROVIDERS (default: anthropic when ANTHROPIC_API_KEY is set)
+  AI_MODEL         the model; each provider has a default where one is known
+  <provider key>   each provider's own key, e.g. ANTHROPIC_API_KEY,
+                   ALIBABA_TOKEN_PLAN_API_KEY (AI_API_KEY also works, for any)
+  AI_BASE_URL      the endpoint for `custom`, or to override a preset
 """
 from __future__ import annotations
 
@@ -18,15 +19,43 @@ from dataclasses import dataclass
 import httpx
 
 CLAUDE_DEFAULT_MODEL = "claude-opus-5"
-OPENAI_COMPATIBLE = {
-    "openai": ("OpenAI", "https://api.openai.com/v1"),
-    "deepseek": ("DeepSeek", "https://api.deepseek.com/v1"),
-    "kimi": ("Kimi (Moonshot)", "https://api.moonshot.cn/v1"),
-    "openrouter": ("OpenRouter", "https://openrouter.ai/api/v1"),
-    "ollama": ("Ollama (local, free)", "http://localhost:11434/v1"),
-    "custom": ("Custom OpenAI-compatible server", None),
+# kind "anthropic" goes through the Claude SDK; "openai" through /chat/completions.
+PROVIDERS: dict[str, dict] = {
+    "anthropic": {"label": "Claude (Anthropic)", "kind": "anthropic", "base_url": None,
+                  "key_env": "ANTHROPIC_API_KEY", "default_model": CLAUDE_DEFAULT_MODEL,
+                  "models": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"],
+                  "key_hint": "Starts with sk-ant-"},
+    "alibaba_token_plan": {
+        "label": "Alibaba Cloud Token Plan", "kind": "openai",
+        "base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "key_env": "ALIBABA_TOKEN_PLAN_API_KEY", "default_model": "qwen3.8-max",
+        "models": ["qwen3.8-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.8-flash",
+                   "deepseek-v4-pro", "kimi-k2.6", "glm-5.3", "MiniMax-M2.5"],
+        "key_hint": "Token Plan key, starts with sk-sp- (Singapore region)"},
+    "alibaba": {"label": "Alibaba Cloud Model Studio (pay-as-you-go)", "kind": "openai",
+                "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "key_env": "DASHSCOPE_API_KEY", "default_model": "qwen-plus",
+                "models": ["qwen-plus", "qwen-max", "qwen-flash"],
+                "key_hint": "Model Studio key (not a Token Plan key)"},
+    "deepseek": {"label": "DeepSeek", "kind": "openai", "base_url": "https://api.deepseek.com/v1",
+                 "key_env": "DEEPSEEK_API_KEY", "default_model": "deepseek-chat",
+                 "models": ["deepseek-chat"], "key_hint": ""},
+    "kimi": {"label": "Kimi (Moonshot)", "kind": "openai", "base_url": "https://api.moonshot.cn/v1",
+             "key_env": "MOONSHOT_API_KEY", "default_model": "", "models": [], "key_hint": ""},
+    "openrouter": {"label": "OpenRouter", "kind": "openai", "base_url": "https://openrouter.ai/api/v1",
+                   "key_env": "OPENROUTER_API_KEY", "default_model": "", "models": [],
+                   "key_hint": ""},
+    "openai": {"label": "OpenAI", "kind": "openai", "base_url": "https://api.openai.com/v1",
+               "key_env": "OPENAI_API_KEY", "default_model": "", "models": [], "key_hint": ""},
+    "ollama": {"label": "Ollama (local, free)", "kind": "openai",
+               "base_url": "http://localhost:11434/v1", "key_env": None,
+               "default_model": "", "models": [], "key_hint": "No key needed"},
+    "custom": {"label": "Custom OpenAI-compatible server", "kind": "openai", "base_url": None,
+               "key_env": "AI_API_KEY", "default_model": "", "models": [],
+               "key_hint": "Only if the server needs one"},
 }
-PROVIDERS = ("anthropic", *OPENAI_COMPATIBLE)
+# AI_PROVIDER=none turns the AI off even when a key is present.
+NO_AI = "none"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 OPENAI_MAX_TOKENS = 8192
 
@@ -46,46 +75,61 @@ class AIConfig:
         return {"provider": self.provider, "model": self.model}
 
 
-def config_from_env() -> AIConfig | None:
-    provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
-    model = (os.environ.get("AI_MODEL") or "").strip()
-    if not provider:
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            provider = "anthropic"
-        else:
-            return None
+def _key(provider: str) -> str | None:
+    env = PROVIDERS[provider]["key_env"]
+    return (os.environ.get(env) if env else None) or os.environ.get("AI_API_KEY") or None
+
+
+def config_for(provider: str, model: str | None = None) -> AIConfig:
+    """The settings to call `provider`, with its key read from the environment."""
     if provider not in PROVIDERS:
-        raise ValueError(f"Unknown AI_PROVIDER {provider!r}. Valid: {', '.join(PROVIDERS)}.")
-
-    if provider == "anthropic":
-        key = os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise ValueError("AI_PROVIDER is anthropic but ANTHROPIC_API_KEY is not set.")
-        return AIConfig("anthropic", model or CLAUDE_DEFAULT_MODEL, key, None)
-
+        raise ValueError(f"Unknown AI provider {provider!r}. Valid: {', '.join(PROVIDERS)}.")
+    spec = PROVIDERS[provider]
+    model = (model or os.environ.get("AI_MODEL") or spec["default_model"] or "").strip()
     if not model:
-        raise ValueError(f"AI_PROVIDER is {provider}; set AI_MODEL to the model to use.")
-    base = os.environ.get("AI_BASE_URL") or OPENAI_COMPATIBLE[provider][1]
+        raise ValueError(f"Choose a model for {spec['label']} (AI_MODEL).")
+    key = _key(provider)
+    if spec["kind"] == "anthropic":
+        if not key:
+            raise ValueError(f"{spec['label']} needs a key: set {spec['key_env']}.")
+        return AIConfig(provider, model, key, None)
+    base = os.environ.get("AI_BASE_URL") or spec["base_url"]
     if not base:
-        raise ValueError("AI_PROVIDER is custom; set AI_BASE_URL to the server's /v1 URL.")
-    key = os.environ.get("AI_API_KEY") or None
-    if key is None and provider != "ollama" and provider != "custom":
-        raise ValueError(f"AI_PROVIDER is {provider}; set AI_API_KEY.")
+        raise ValueError(f"{spec['label']} needs a server address: set AI_BASE_URL.")
+    if key is None and provider not in ("ollama", "custom"):
+        raise ValueError(f"{spec['label']} needs a key: set {spec['key_env']}.")
     return AIConfig(provider, model, key, base.rstrip("/"))
 
 
+def config_from_env() -> AIConfig | None:
+    provider = (os.environ.get("AI_PROVIDER") or "").strip().lower()
+    if provider == NO_AI:
+        return None
+    if not provider:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return None
+        provider = "anthropic"
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unknown AI_PROVIDER {provider!r}. Valid: {', '.join(PROVIDERS)}.")
+    return config_for(provider)
+
+
 def available_providers() -> list[dict]:
-    """Every provider, with the one the environment selects marked active."""
+    """Every provider for the settings page: whether its key is set (never the
+    key itself), its models, and which one is in use."""
     try:
         active = config_from_env()
     except ValueError:
         active = None
-    labels = {"anthropic": "Claude (Anthropic)",
-              **{pid: label for pid, (label, _) in OPENAI_COMPATIBLE.items()}}
-    return [{"id": pid, "label": labels[pid],
-             "active": bool(active and active.provider == pid),
+    chosen = (os.environ.get("AI_PROVIDER") or "").strip().lower() or (active and active.provider)
+    return [{"id": pid, "label": spec["label"], "kind": spec["kind"],
+             "has_key": bool(_key(pid)) or spec["key_env"] is None,
+             "key_env": spec["key_env"], "key_hint": spec["key_hint"],
+             "needs_base_url": spec["base_url"] is None and spec["kind"] == "openai",
+             "models": spec["models"], "default_model": spec["default_model"],
+             "active": pid == chosen,
              "model": active.model if active and active.provider == pid else None}
-            for pid in PROVIDERS]
+            for pid, spec in PROVIDERS.items()]
 
 
 def parse_json(raw: str) -> dict:
@@ -182,7 +226,7 @@ def _openai_compatible(config: AIConfig, system: str, user: str, schema: dict,
 def complete_json(config: AIConfig, system: str, user: str, schema: dict,
                   max_tokens: int) -> dict:
     """One request, answered as a JSON object that follows `schema`."""
-    if config.provider == "anthropic":
+    if PROVIDERS[config.provider]["kind"] == "anthropic":
         try:
             return _claude(config, system, user, schema, max_tokens)
         except AIError:
