@@ -32,6 +32,13 @@ def edit_spec(clip: dict, style: dict, fill: dict | None, content_type: str,
     }
 
 
+def _look(spec: dict) -> str:
+    from clipper.captions import CAPTION_STYLES
+
+    look = CAPTION_STYLES.get(spec.get("caption_style", "classic"))
+    return look["label"].split(": ", 1)[-1] if look else "custom"
+
+
 def _rating(spec: dict) -> str:
     score = spec["laya"]["score"] or 0.0
     if spec.get("source") == "action":
@@ -56,7 +63,8 @@ def render_prompt(spec: dict, style_notes: str, transcript_slice: str) -> str:
         f"- Kind of video: {spec['content_type']}; kind of moment: {spec['category']}.",
         _rating(spec),
         f"- Layout: {spec['layout']}, {'vertical 9:16' if spec['vertical'] else 'original shape'}; "
-        f"captions: {spec['captions']} ({spec['caption_case']} case).",
+        f"captions: {spec['captions']} ({spec['caption_case']} case, "
+        f"{spec.get('caption_style', 'classic')} look: {_look(spec)}).",
     ]
     if spec["title"]:
         lines.append(f"- Title: {spec['title']}")

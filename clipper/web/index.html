@@ -70,6 +70,15 @@
   .result video { max-height: 420px; }
   .result p { margin: 6px 0 0; font-size: 14px; }
   .result a { color: var(--accent); font-size: 13px; margin-right: 10px; }
+  input[type=text], input[type=password], input[type=url] { width: 100%; font: inherit;
+    color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ok { color: var(--ok); font-size: 13px; }
+  details.panel > summary { cursor: pointer; font-weight: 600; }
+  details.panel[open] > summary { margin-bottom: 14px; }
+  #caption-preview-box { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #caption-preview { max-width: 270px; max-height: 480px; border-radius: 8px; background: #000;
+                     border: 1px solid var(--line); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -86,6 +95,37 @@
     </div>
     <input id="file" type="file" accept="video/*,.mkv" hidden>
   </section>
+
+  <details id="ai-panel" class="panel">
+    <summary>AI provider: <span id="ai-summary">not set</span></summary>
+    <div class="grid">
+      <div>
+        <label for="ai-provider">Provider</label>
+        <select id="ai-provider"></select>
+        <div id="ai-key-state" class="hint"></div>
+      </div>
+      <div>
+        <label for="ai-model">Model</label>
+        <input id="ai-model" type="text" list="ai-models" autocomplete="off">
+        <datalist id="ai-models"></datalist>
+      </div>
+      <div class="full" id="ai-key-row">
+        <label for="ai-key">API key <span id="ai-key-env" class="hint"></span></label>
+        <input id="ai-key" type="password" autocomplete="off" placeholder="Leave empty to keep the saved key">
+      </div>
+      <div class="full" id="ai-url-row" hidden>
+        <label for="ai-url">Server address (…/v1)</label>
+        <input id="ai-url" type="url" placeholder="http://localhost:8000/v1">
+      </div>
+      <div class="full row">
+        <button id="ai-save">Use this AI</button>
+        <button id="ai-test" class="quiet">Test connection</button>
+        <span id="ai-result" class="hint"></span>
+      </div>
+      <div class="full hint">Keys are stored in the local <code>.env</code> file and never sent back to the page.
+        Each provider keeps its own key, so switching back and forth needs no retyping.</div>
+    </div>
+  </details>
 
   <section class="panel grid">
     <div>
@@ -165,6 +205,21 @@
     <div class="full">
       <label class="toggle"><input id="vertical" type="checkbox" checked> Vertical 9:16</label>
     </div>
+    <div class="full" id="caption-style-box">
+      <label for="caption_style">Caption look</label>
+      <div id="caption-preview-box">
+        <div style="flex:1; min-width:220px">
+          <select id="caption_style"></select>
+          <div class="row" style="margin-top:8px">
+            <label for="preview-clip" style="margin:0">Preview on</label>
+            <select id="preview-clip" style="width:auto"></select>
+            <button id="preview-btn" class="quiet">Show preview</button>
+          </div>
+          <div id="preview-state" class="hint">A single frame of the clip, with this layout and caption look.</div>
+        </div>
+        <img id="caption-preview" alt="Preview of the chosen caption look" hidden>
+      </div>
+    </div>
     <div class="full">
       <label for="notes">Style notes: tone, pacing, brand rules</label>
       <textarea id="notes" placeholder="e.g. Energetic, cut every pause, always call viewers 'the crew', no swearing in captions"></textarea>
@@ -213,13 +268,84 @@ async function loadConfig() {
   config.models.forEach((m) => option($("model"), m, m));
   showDevice();
   if (!config.hf_token) { $("diarize").checked = false; $("hf-warn").hidden = false; }
-  const ai = config.ai;
+  for (const c of config.caption_styles) option($("caption_style"), c.id, c.label);
+  showAI(config.ai, true);
+  applyStyle(config.style);
+}
+
+function providerLabel(id) {
+  const p = config.ai.providers.find((x) => x.id === id);
+  return p ? p.label : id;
+}
+
+function showAI(ai, fillForm) {
+  config.ai = ai;
   aiReady = !!ai.active;
   $("ai-status").textContent = ai.error ? "AI setup problem: " + ai.error
-    : ai.active ? "The AI (" + ai.active.provider + ", " + ai.active.model + ") reads the transcript and proposes the clips."
-    : "No AI configured: the transcript is cut into sentence-aligned chunks. Set ANTHROPIC_API_KEY in .env to let Claude pick clips.";
+    : ai.active ? "The AI (" + providerLabel(ai.active.provider) + ", " + ai.active.model + ") reads the transcript and proposes the clips."
+    : "No AI chosen: the transcript is cut into sentence-aligned chunks. Pick a provider above to let an AI choose clips.";
   $("ai-status").className = ai.error ? "warn" : "hint";
-  applyStyle(config.style);
+  $("ai-summary").textContent = ai.active ? providerLabel(ai.active.provider) + " · " + ai.active.model
+    : ai.error ? "needs attention" : "none (no AI)";
+  if (ai.error) $("ai-panel").open = true;
+  for (const box of document.querySelectorAll("#rows .fill")) {
+    box.disabled = !aiReady; box.title = aiReady ? "" : "Needs an AI provider";
+  }
+  if (!fillForm) return;
+  const select = $("ai-provider");
+  select.textContent = "";
+  option(select, "none", "No AI (sentence-aligned chunks)");
+  for (const p of ai.providers) option(select, p.id, p.label + (p.has_key ? "" : " (no key yet)"));
+  const active = ai.providers.find((p) => p.active);
+  select.value = active ? active.id : "none";
+  showProvider(active && active.model);
+}
+
+function showProvider(model) {
+  const id = $("ai-provider").value;
+  const p = config.ai.providers.find((x) => x.id === id);
+  const list = $("ai-models");
+  list.textContent = "";
+  $("ai-model").disabled = $("ai-key").disabled = !p;
+  $("ai-key-row").hidden = !p || p.key_env === null;
+  $("ai-url-row").hidden = !p || !p.needs_base_url;
+  $("ai-result").textContent = "";
+  if (!p) { $("ai-model").value = ""; $("ai-key-state").textContent = "Clips are cut at sentence ends; no AI fill-in."; return; }
+  for (const m of p.models) option(list, m, m);
+  $("ai-model").value = model || p.model || p.default_model || "";
+  $("ai-model").placeholder = p.models.length ? p.models[0] : "model name";
+  $("ai-key").value = "";
+  $("ai-key-env").textContent = p.key_env ? "(" + p.key_env + ")" : "";
+  $("ai-key").placeholder = p.has_key ? "A key is saved. Type a new one to replace it." : (p.key_hint || "Paste the key");
+  $("ai-key-state").textContent = p.key_env === null ? "No key needed."
+    : p.has_key ? "Key saved." : "No key saved yet" + (p.key_hint ? ": " + p.key_hint : ".");
+}
+
+const send = (url, method, body) => json(url, { method, headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body || {}) });
+
+async function saveAI() {
+  const provider = $("ai-provider").value;
+  const body = { provider };
+  if (provider !== "none") {
+    body.model = $("ai-model").value.trim();
+    if ($("ai-key").value.trim()) body.api_key = $("ai-key").value.trim();
+    if (!$("ai-url-row").hidden) body.base_url = $("ai-url").value.trim();
+  }
+  $("ai-result").className = "hint"; $("ai-result").textContent = "Saving…";
+  try {
+    showAI(await send("/api/ai", "PUT", body), true);
+    $("ai-result").className = "ok"; $("ai-result").textContent = "Saved.";
+  } catch (error) { $("ai-result").className = "warn"; $("ai-result").textContent = error.message; }
+}
+
+async function testAI() {
+  $("ai-result").className = "hint"; $("ai-result").textContent = "Asking the AI…";
+  try {
+    const r = await send("/api/ai/test", "POST");
+    $("ai-result").className = "ok";
+    $("ai-result").textContent = "Works: " + providerLabel(r.provider) + " answered with " + r.model + ".";
+  } catch (error) { $("ai-result").className = "warn"; $("ai-result").textContent = error.message; }
 }
 
 function showDevice() {
@@ -228,11 +354,11 @@ function showDevice() {
 }
 
 function applyStyle(s) {
-  for (const key of ["layout", "captions", "caption_case", "encoder", "notes"]) $(key).value = s[key];
+  for (const key of ["layout", "captions", "caption_style", "caption_case", "encoder", "notes"]) $(key).value = s[key];
   $("vertical").checked = s.vertical;
 }
 const styleNow = () => ({ layout: $("layout").value, captions: $("captions").value,
-  caption_case: $("caption_case").value, encoder: $("encoder").value,
+  caption_style: $("caption_style").value, caption_case: $("caption_case").value, encoder: $("encoder").value,
   vertical: $("vertical").checked, notes: $("notes").value });
 
 function setFile(f) {
@@ -338,7 +464,7 @@ async function loadPreview(run, showMade) {
     include.addEventListener("change", () => { tr.className = include.checked ? "" : "off"; });
     const fill = document.createElement("input");
     fill.type = "checkbox"; fill.checked = clip.fill_in; fill.className = "fill";
-    fill.disabled = !aiReady; if (!aiReady) fill.title = "Needs an AI configured in .env";
+    fill.disabled = !aiReady; if (!aiReady) fill.title = "Needs an AI provider";
     const play = document.createElement("button");
     play.className = "quiet"; play.textContent = "▶ " + clock(clip.start) + "–" + clock(clip.end);
     play.addEventListener("click", () => {
@@ -370,6 +496,10 @@ async function loadPreview(run, showMade) {
     }
     rows.appendChild(tr);
   }
+  const pick = $("preview-clip"), was = pick.value;
+  pick.textContent = "";
+  for (const clip of data.clips) option(pick, clip.id, clip.id + " · " + clock(clip.start) + " " + (clip.title_hint || "").slice(0, 30));
+  if ([...pick.options].some((o) => o.value === was)) pick.value = was;
   $("preview").hidden = $("style").hidden = false;
   $("make").disabled = false;
   if (showMade) showResults(run, data.made);
@@ -420,6 +550,30 @@ async function saveStyle() {
   } catch (error) { $("saved").textContent = error.message; }
 }
 
+let previewUrl = null;
+async function showPreview() {
+  if (!current || !$("preview-clip").value) return;
+  const s = styleNow();
+  const q = new URLSearchParams({ run: current, clip: $("preview-clip").value, layout: s.layout,
+    captions: s.captions, caption_style: s.caption_style, caption_case: s.caption_case,
+    vertical: s.vertical ? "1" : "0" });
+  $("preview-btn").disabled = true;
+  $("preview-state").className = "hint"; $("preview-state").textContent = "Rendering one frame…";
+  try {
+    const response = await fetch("/api/preview?" + q);
+    if (!response.ok) throw new Error((await response.json()).error || response.statusText);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = URL.createObjectURL(await response.blob());
+    $("caption-preview").src = previewUrl; $("caption-preview").hidden = false;
+    $("preview-state").textContent = "Preview of " + $("preview-clip").value + ".";
+  } catch (error) {
+    $("preview-state").className = "warn"; $("preview-state").textContent = error.message;
+  } finally { $("preview-btn").disabled = false; }
+}
+// Refresh an open preview when the look changes.
+for (const id of ["caption_style", "caption_case", "layout", "captions", "vertical", "preview-clip"])
+  $(id).addEventListener("change", () => { if (!$("caption-preview").hidden) showPreview(); });
+
 function poll() {
   clearInterval(polling);
   polling = setInterval(async () => {
@@ -440,6 +594,10 @@ $("device").addEventListener("change", showDevice);
 $("analyze").addEventListener("click", analyze);
 $("make").addEventListener("click", make);
 $("save-style").addEventListener("click", saveStyle);
+$("preview-btn").addEventListener("click", showPreview);
+$("ai-provider").addEventListener("change", () => showProvider());
+$("ai-save").addEventListener("click", saveAI);
+$("ai-test").addEventListener("click", testAI);
 
 loadConfig().then(async () => {
   const status = await json("/api/status");

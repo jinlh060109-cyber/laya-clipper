@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from clipper.agent import AgentError
-from clipper.ai import AIError
+from clipper.ai import NO_AI, PROVIDERS, AIError, available_providers, config_for
 from clipper.device import VALID as DEVICES
 from clipper.hardware import detect
 from clipper.ingest import check_same_source, ingest
@@ -36,6 +36,45 @@ def _load_dotenv() -> None:
                 os.environ.setdefault(key.strip(), value.strip())
 
 
+STYLE_FLAGS = ("layout", "captions", "caption_style", "caption_case", "encoder")
+
+
+def _ai_arguments(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--ai", dest="ai_provider", choices=(*PROVIDERS, NO_AI),
+                   help="AI provider for this command only (default: AI_PROVIDER in .env). "
+                        "`clipper providers` lists them.")
+    p.add_argument("--ai-model", help="Model for --ai (default: the provider's own default).")
+
+
+def _choose_ai(args) -> None:
+    """Point this process at the provider given on the command line, after
+    checking it can be used; .env is left as it is."""
+    provider = getattr(args, "ai_provider", None)
+    model = getattr(args, "ai_model", None)
+    if provider is None and model is None:
+        return
+    if provider is None:
+        provider = (os.environ.get("AI_PROVIDER") or "anthropic").strip().lower()
+    os.environ["AI_PROVIDER"] = provider
+    if provider == NO_AI:
+        return
+    if model:
+        os.environ["AI_MODEL"] = model
+    elif "ai_provider" in vars(args) and args.ai_provider:
+        os.environ.pop("AI_MODEL", None)  # another provider's model would not fit
+    config_for(provider)  # raises with the missing key or model named
+
+
+def _providers() -> int:
+    for p in available_providers():
+        mark = "*" if p["active"] else " "
+        key = "key set" if p["has_key"] else f"no key ({p['key_env']})"
+        model = p["model"] or p["default_model"] or "choose with --ai-model"
+        print(f" {mark} {p['id']:<20} {p['label']:<44} {key:<34} {model}")
+    print("* = in use. Choose with --ai <id> [--ai-model <model>], or in the web page.")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="clipper")
     sub = parser.add_subparsers(dest="command")
@@ -47,13 +86,17 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--no-diarize", action="store_true")
     p.add_argument("--prompt", default="", help="What you are looking for, e.g. 'useful tips'.")
     p.add_argument("--top", type=int, default=5, help="How many clips to tick.")
+    _ai_arguments(p)
 
     p = sub.add_parser("make", help="Steps 7-10: style, optional AI fill-in, edit.")
     p.add_argument("run")
     p.add_argument("--only", help="Comma-separated clip ids to make, e.g. c1,c3,a0.")
     p.add_argument("--fill-in", action="store_true", help="Let the AI fill in each clip.")
-    for key in ("layout", "captions", "caption_case", "encoder"):
+    for key in STYLE_FLAGS:
         p.add_argument(f"--{key.replace('_', '-')}", dest=key, choices=CHOICES[key])
+    _ai_arguments(p)
+
+    sub.add_parser("providers", help="List the AI providers and which have a key.")
 
     p = sub.add_parser("hardware", help="Show the GPUs and video encoders found.")
 
@@ -136,9 +179,7 @@ def _make(args) -> int:
             if unknown:
                 raise ValueError(f"Unknown clip id(s): {', '.join(unknown)}.")
         apply_choices(run, choices)
-    overrides = {key: getattr(args, key) for key in ("layout", "captions",
-                                                     "caption_case", "encoder")
-                 if getattr(args, key)}
+    overrides = {key: getattr(args, key) for key in STYLE_FLAGS if getattr(args, key)}
     steps = default_steps()
     chosen = steps.style(run, {"style": overrides})
     fills = steps.fillin(run, chosen, _printer("AI filling in clips"))
@@ -191,6 +232,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
+        _choose_ai(args)
+        if args.command == "providers":
+            return _providers()
         if args.command == "analyze":
             return _analyze(args)
         if args.command == "make":

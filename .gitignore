@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 .venv-gpu/
 *.egg-info/
+.playwright-mcp/

@@ -32,15 +32,21 @@ ffmpeg must be on PATH and must include libass (`ffmpeg -filters | grep subtitle
 
 ### The AI (steps 3-4 and 8)
 
-Claude is the default: put `ANTHROPIC_API_KEY=...` in `.env` and it uses
-`claude-opus-5`. Any OpenAI-compatible server works too:
+Pick the AI in the web page (**AI provider** panel: provider, model, key,
+**Test connection**) or on the command line with `--ai <id> --ai-model <model>`;
+`clipper providers` lists them. Each provider keeps its own key in `.env`, so
+switching back and forth needs no retyping, and keys are never sent back to
+the page.
 
-| Provider | `.env` |
-|---|---|
-| Claude | `ANTHROPIC_API_KEY=...` (optional `AI_MODEL=`) |
-| DeepSeek, Kimi, OpenAI, OpenRouter | `AI_PROVIDER=deepseek`, `AI_MODEL=deepseek-chat`, `AI_API_KEY=...` |
-| Ollama (local, free) | `AI_PROVIDER=ollama`, `AI_MODEL=qwen3` |
-| Anything else | `AI_PROVIDER=custom`, `AI_BASE_URL=http://host/v1`, `AI_MODEL=...` |
+| Provider (`--ai`) | Key in `.env` | Default model |
+|---|---|---|
+| `anthropic` Claude | `ANTHROPIC_API_KEY` | `claude-opus-5` |
+| `alibaba_token_plan` Alibaba Cloud Token Plan | `ALIBABA_TOKEN_PLAN_API_KEY` (`sk-sp-`) | `qwen3.8-max` |
+| `alibaba` Model Studio pay-as-you-go | `DASHSCOPE_API_KEY` | `qwen-plus` |
+| `deepseek`, `kimi`, `openrouter`, `openai` | `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`, ... | set `AI_MODEL` |
+| `ollama` (local, free) | none | set `AI_MODEL`, e.g. `qwen3` |
+| `custom` | `AI_API_KEY` (optional) + `AI_BASE_URL=http://host/v1` | set `AI_MODEL` |
+| `none` | | no AI, even with a key saved |
 
 Without an AI the app still runs: the transcript is cut into 20-45 s
 sentence-aligned chunks and Laya asks its four built-in questions. If the AI
@@ -81,6 +87,18 @@ clip lands in `runs/<name>/clips/NN-title/`:
 | `edit.json` | the same, structured |
 | `captions.srt` | the captions |
 
+**Caption looks** (`caption_style`), each previewed on a real frame of the
+clip before you make anything (**Show preview** in the style panel):
+
+| Look | What it does |
+|---|---|
+| `classic` | white, each word turns gold as it is spoken |
+| `bold` | big UPPERCASE, short lines, words turn green |
+| `boxed` | white text on a dark box |
+| `minimal` | clean white with a soft shadow |
+| `one_word` | one big word at a time, popping in |
+| `neon` | glowing cyan outline, words turn pink |
+
 **Layouts.** `fit` (default) keeps the whole picture, centred over a blurred
 copy of itself, so on-screen text and motion graphics are never cut off.
 `crop` fills the vertical frame and cuts the sides (best for one face in the
@@ -89,7 +107,9 @@ middle).
 From the command line:
 
     clipper analyze "episode47.mp4" --prompt "useful tips" --top 5
-    clipper make runs/2026-09-23-episode47 --only c1,c3 --fill-in
+    clipper make runs/2026-09-23-episode47 --only c1,c3 --fill-in --caption-style bold
+    clipper analyze "episode47.mp4" --ai alibaba_token_plan --ai-model kimi-k2.6
+    clipper providers
 
 Gameplay without commentary works too: the `action` step finds stretches of
 8 s or more where nobody talks, ranked by loudness, motion and scene cuts,
