@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
@@ -159,8 +160,7 @@ def run_edit(run: Run, style: dict, fills: dict | None = None,
     width, height = display_size(source_meta["video"])
     root = run.clips_dir().resolve()  # absolute: ffmpeg may run in another cwd
 
-    done = []
-    for index, clip in enumerate(clips, start=1):
+    def _edit_one(index: int, clip: dict) -> dict:
         start, end = clip["start"], min(clip["end"], duration)
         fill = fills.get(clip["id"])
         title = (fill or {}).get("title") or clip.get("title_hint") or clip["id"]
@@ -182,8 +182,10 @@ def run_edit(run: Run, style: dict, fills: dict | None = None,
         else:
             srt.unlink(missing_ok=True)
 
-        _ffmpeg(cut_command(ffmpeg, source, start, end, folder / "cut.mp4", encoder),
-                folder / "cut.mp4")
+        # The untouched cut does not depend on the edit: encode both at once.
+        cut_job = pool.submit(_ffmpeg, cut_command(ffmpeg, source, start, end,
+                                                   folder / "cut.mp4", encoder),
+                              folder / "cut.mp4")
         vertical = style["vertical"]
         out_height = 1920 if vertical else height
         final = folder / "final.mp4"
@@ -208,13 +210,19 @@ def run_edit(run: Run, style: dict, fills: dict | None = None,
             chain = build_filter_chain(width, height, vertical, None, layout=style["layout"],
                                        punch_ins=zooms, fps=fps)
             _ffmpeg(final_command(ffmpeg, source, start, end, final, chain, encoder), final)
+        cut_job.result()  # re-raises a failed cut
 
-        done.append({"id": clip["id"], "folder": stem, "title": spec["title"],
-                     "duration": round(end - start, 2), "layout": style["layout"],
-                     "encoder": encoder, "punch_ins": len(zooms or []),
-                     "final": f"clips/{stem}/final.mp4",
-                     "prompt": f"clips/{stem}/prompt.md"})
-        if progress is not None:
-            progress(index, len(clips))
+        return {"id": clip["id"], "folder": stem, "title": spec["title"],
+                "duration": round(end - start, 2), "layout": style["layout"],
+                "encoder": encoder, "punch_ins": len(zooms or []),
+                "final": f"clips/{stem}/final.mp4",
+                "prompt": f"clips/{stem}/prompt.md"}
+
+    done = []
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        for index, clip in enumerate(clips, start=1):
+            done.append(_edit_one(index, clip))
+            if progress is not None:
+                progress(index, len(clips))
     run.write_json("clips.json", {"clips": done})
     return done
