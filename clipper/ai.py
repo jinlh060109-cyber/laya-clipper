@@ -8,6 +8,10 @@ Configured from the environment (.env), which the web page's AI panel writes:
   <provider key>   each provider's own key, e.g. ANTHROPIC_API_KEY,
                    ALIBABA_TOKEN_PLAN_API_KEY (AI_API_KEY also works, for any)
   AI_BASE_URL      the endpoint for `custom`, or to override a preset
+  AI_THINKING      on: let models that reason before answering do so (slower;
+                   off by default where the provider allows switching it off)
+  AI_FALLBACK_MODEL  tried once when the model is rate-limited, overloaded or
+                   times out (default: the provider's fast model, if it has one)
 """
 from __future__ import annotations
 
@@ -31,12 +35,14 @@ PROVIDERS: dict[str, dict] = {
         "key_env": "ALIBABA_TOKEN_PLAN_API_KEY", "default_model": "qwen3.8-max",
         "models": ["qwen3.8-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.8-flash",
                    "deepseek-v4-pro", "kimi-k2.6", "glm-5.3", "MiniMax-M2.5"],
-        "key_hint": "Token Plan key, starts with sk-sp- (Singapore region)"},
+        "key_hint": "Token Plan key, starts with sk-sp- (Singapore region)",
+        "no_thinking": {"enable_thinking": False}, "fallback_model": "qwen3.8-flash"},
     "alibaba": {"label": "Alibaba Cloud Model Studio (pay-as-you-go)", "kind": "openai",
                 "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
                 "key_env": "DASHSCOPE_API_KEY", "default_model": "qwen-plus",
                 "models": ["qwen-plus", "qwen-max", "qwen-flash"],
-                "key_hint": "Model Studio key (not a Token Plan key)"},
+                "key_hint": "Model Studio key (not a Token Plan key)",
+                "no_thinking": {"enable_thinking": False}, "fallback_model": "qwen-flash"},
     "deepseek": {"label": "DeepSeek", "kind": "openai", "base_url": "https://api.deepseek.com/v1",
                  "key_env": "DEEPSEEK_API_KEY", "default_model": "deepseek-chat",
                  "models": ["deepseek-chat"], "key_hint": ""},
@@ -193,8 +199,48 @@ def _claude_failure(exc: Exception) -> str:
     return f"The Claude request failed: {exc}"
 
 
+RETRY_STATUS = (429, 500, 502, 503, 504)
+
+
+def _thinking_off(provider: str) -> dict:
+    """Extra request fields that stop a model reasoning before it answers.
+
+    Qwen 3.8 on Model Studio thinks by default and writes about 100
+    characters of reasoning a second before any JSON: a 99 s transcript took
+    over 7 minutes. Switched off, the same request answered in 13 s with
+    equally sensible clips."""
+    if (os.environ.get("AI_THINKING") or "").strip().lower() in ("1", "on", "true", "yes"):
+        return {}
+    return dict(PROVIDERS.get(provider, {}).get("no_thinking") or {})
+
+
+def fallback_model(config: AIConfig) -> str | None:
+    model = (os.environ.get("AI_FALLBACK_MODEL")
+             or PROVIDERS.get(config.provider, {}).get("fallback_model") or "").strip()
+    return model if model and model != config.model else None
+
+
 def _openai_compatible(config: AIConfig, system: str, user: str, schema: dict,
                        max_tokens: int) -> dict:
+    try:
+        return _openai_request(config, system, user, schema, max_tokens)
+    except _Retryable as exc:
+        backup = fallback_model(config)
+        if backup is None:
+            raise AIError(str(exc)) from exc
+        try:
+            return _openai_request(AIConfig(config.provider, backup, config.api_key,
+                                            config.base_url), system, user, schema, max_tokens)
+        except _Retryable as again:
+            raise AIError(f"{exc} The fallback model {backup} failed too: {again}") from again
+
+
+class _Retryable(AIError):
+    """A failure another model might not have: rate limit, overload, timeout."""
+
+
+def _openai_request(config: AIConfig, system: str, user: str, schema: dict,
+                    max_tokens: int) -> dict:
     # Not every OpenAI-compatible server enforces a JSON schema, so the schema
     # is also spelled out in the instructions and the answer is validated.
     instructions = (f"{system}\n\nReply with one JSON object only, matching this "
@@ -209,15 +255,23 @@ def _openai_compatible(config: AIConfig, system: str, user: str, schema: dict,
                                {"role": "user", "content": user}],
                   "response_format": {"type": "json_object"},
                   # Claude takes 64000; most OpenAI-compatible servers cap at 8192.
-                  "max_tokens": min(max_tokens, OPENAI_MAX_TOKENS)},
+                  "max_tokens": min(max_tokens, OPENAI_MAX_TOKENS),
+                  **_thinking_off(config.provider)},
             timeout=600.0,
         )
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+    except httpx.ConnectError as exc:
         # The OS's own text for this is often localized and garbled on Windows.
         raise AIError(f"Could not reach the {config.provider} server at {config.base_url}. "
                       f"Is it running, and is AI_BASE_URL right?") from exc
+    except httpx.TimeoutException as exc:
+        raise _Retryable(f"{config.model} on {config.provider} did not answer in time.") from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in RETRY_STATUS:
+            raise _Retryable(f"{config.model} on {config.provider} is busy or rate-limited "
+                             f"({exc.response.status_code}).") from exc
+        raise AIError(f"The {config.provider} request failed: {exc}") from exc
     except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
         raise AIError(f"The {config.provider} request failed: {exc}") from exc
     return parse_json(content)

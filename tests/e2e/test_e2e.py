@@ -18,16 +18,26 @@ ANALYZE_TIMEOUT = 15 * 60 * 1000  # ms: Whisper + Laya on a CPU can be slow
 MAKE_TIMEOUT = 10 * 60 * 1000
 
 
-def _analyze(page, server, video, prompt=""):
+def _finish(page, selector, timeout):
+    """Wait for `selector` to show, but stop at once if the job fails."""
+    page.wait_for_selector(f"{selector}:not([hidden]), #error:not([hidden])", timeout=timeout)
+    assert page.locator("#error").is_hidden(), page.inner_text("#error")
+
+
+def _open(page, server):
     page.goto(server.url)
+    page.wait_for_selector("body[data-ready]")
+
+
+def _analyze(page, server, video, prompt=""):
+    _open(page, server)
     page.set_input_files("#file", str(video))
     page.select_option("#model", "small")
     if prompt:
         page.fill("#prompt", prompt)
     page.fill("#top", "2")
     page.click("#analyze")
-    page.wait_for_selector("#preview:not([hidden])", timeout=ANALYZE_TIMEOUT)
-    assert page.locator("#error").is_hidden(), page.inner_text("#error")
+    _finish(page, "#preview", ANALYZE_TIMEOUT)
     return [p for p in server.runs.iterdir() if p.is_dir()][0]
 
 
@@ -74,7 +84,7 @@ def test_no_ai_flow_from_upload_to_captioned_clips(page, start_server, source_vi
     for i in range(boxes.count()):
         boxes.nth(i).set_checked(i == 0)
     page.click("#make")
-    page.wait_for_selector("#done:not([hidden])", timeout=MAKE_TIMEOUT)
+    _finish(page, "#done", MAKE_TIMEOUT)
     assert page.locator("#results video").count() == 1
     ready = page.wait_for_function(
         "() => { const v = document.querySelector('#results video');"
@@ -94,7 +104,7 @@ def test_no_ai_flow_from_upload_to_captioned_clips(page, start_server, source_vi
 
     # The style chosen on the page is remembered for the next visit.
     page.reload()
-    page.wait_for_function("() => document.querySelector('#caption_style').options.length > 0")
+    page.wait_for_selector("body[data-ready]")
     assert page.input_value("#caption_style") == "bold"
 
     # The CLI can re-make the same run in another look.
@@ -112,7 +122,7 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(page, start_serve
     if creds is None:
         pytest.skip("No AI key in the environment")
     server = start_server()
-    page.goto(server.url)
+    _open(page, server)
     page.click("#ai-panel summary")
     assert page.inner_text("#ai-summary").startswith("none")
 
@@ -146,11 +156,17 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(page, start_serve
         fills.nth(i).set_checked(i == 0)
     page.select_option("#caption_style", "neon")
     page.click("#make")
-    page.wait_for_selector("#done:not([hidden])", timeout=MAKE_TIMEOUT)
+    _finish(page, "#done", MAKE_TIMEOUT)
     spec = json.loads(next((run / "clips").glob("*/edit.json")).read_text(encoding="utf-8"))
     assert spec["fill_in_used"] and spec["title"] and spec["caption_style"] == "neon"
+    made = json.loads((run / "clips.json").read_text(encoding="utf-8"))["clips"][0]
+    assert made["punch_ins"] == len(spec["punch_ins"])
+    final = run / made["final"]
+    duration = float(ffprobe(final)["format"]["duration"])
+    assert abs(duration - spec["duration"]) < 0.5  # zooms never change the length
 
     # Switching to "no AI" keeps the saved key.
+    page.evaluate("document.querySelector('#ai-panel').open = true")
     page.select_option("#ai-provider", "none")
     page.click("#ai-save")
     page.wait_for_selector("#ai-result.ok")

@@ -202,8 +202,11 @@
         <option value="upper">UPPERCASE</option>
       </select>
     </div>
-    <div class="full">
+    <div>
       <label class="toggle"><input id="vertical" type="checkbox" checked> Vertical 9:16</label>
+    </div>
+    <div>
+      <label class="toggle" title="Only for clips with AI fill-in: the AI picks the moments"><input id="punch_ins" type="checkbox" checked> Zoom in at the AI's punch-in moments</label>
     </div>
     <div class="full" id="caption-style-box">
       <label for="caption_style">Caption look</label>
@@ -356,10 +359,11 @@ function showDevice() {
 function applyStyle(s) {
   for (const key of ["layout", "captions", "caption_style", "caption_case", "encoder", "notes"]) $(key).value = s[key];
   $("vertical").checked = s.vertical;
+  $("punch_ins").checked = s.punch_ins;
 }
 const styleNow = () => ({ layout: $("layout").value, captions: $("captions").value,
   caption_style: $("caption_style").value, caption_case: $("caption_case").value, encoder: $("encoder").value,
-  vertical: $("vertical").checked, notes: $("notes").value });
+  vertical: $("vertical").checked, punch_ins: $("punch_ins").checked, notes: $("notes").value });
 
 function setFile(f) {
   if (!f) return;
@@ -432,9 +436,19 @@ function render(status) {
   const names = Object.keys(status.stages);
   if (!$("st-" + names[names.length - 1]) || $("stages").children.length !== names.length)
     buildStages(names, status.kind === "make" ? "Making clips" : "Analyzing");
-  for (const id of names) setStage(id, status.stages[id]);
+  const secs = (t) => t < 60 ? Math.round(t) + " s" : Math.floor(t / 60) + " min " + Math.round(t % 60) + " s";
+  const timings = status.timings || {};
+  for (const id of names) {
+    const st = status.stages[id];
+    setStage(id, st, id in timings && st !== "pending" ? st + " · " + secs(timings[id]) : st);
+  }
   const p = status.progress;
-  if (p && status.stages[p.stage] === "running") setStage(p.stage, "running", p.done + "/" + p.total);
+  const active = names.find((id) => status.stages[id] === "running");
+  if (active) {
+    const elapsed = status.stage_started ? " · " + secs(status.now - status.stage_started) : "";
+    const count = p && p.stage === active ? " " + p.done + "/" + p.total : "";
+    setStage(active, "running", "running" + count + elapsed);
+  }
   if (status.state === "failed") {
     showError((LABELS[status.failed_stage] || "A step") + " failed: " + status.error);
   }
@@ -610,6 +624,7 @@ $("ai-save").addEventListener("click", saveAI);
 $("ai-test").addEventListener("click", testAI);
 
 loadConfig().then(async () => {
+  document.body.dataset.ready = "1";
   const status = await json("/api/status");
   if (status.state !== "idle") { render(status); if (status.state === "running") poll(); }
 });

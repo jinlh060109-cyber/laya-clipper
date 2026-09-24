@@ -232,3 +232,59 @@ def test_the_provider_list_says_which_have_a_key_and_never_shows_it(monkeypatch,
     assert "qwen3.8-max" in token_plan["models"] and token_plan["key_env"] == "ALIBABA_TOKEN_PLAN_API_KEY"
     assert not listed["deepseek"]["has_key"]
     assert "sk-sp-secret" not in str(listed)
+
+
+def _post_recorder(monkeypatch, statuses):
+    """Fake httpx.post answering with each status in turn; records the bodies."""
+    sent = []
+
+    def fake_post(url, headers, json, timeout):
+        sent.append(json)
+        status = statuses[len(sent) - 1]
+        request = ai.httpx.Request("POST", url)
+        body = {"choices": [{"message": {"content": '{"ok": true}'}}]} if status == 200 else {}
+        return ai.httpx.Response(status, request=request, json=body)
+
+    monkeypatch.setattr(ai.httpx, "post", fake_post)
+    return sent
+
+
+def test_qwen_answers_without_thinking_first_unless_asked(monkeypatch):
+    monkeypatch.delenv("AI_THINKING", raising=False)
+    sent = _post_recorder(monkeypatch, [200, 200])
+    config = ai.AIConfig("alibaba_token_plan", "qwen3.8-max", "k", "http://x/v1")
+    ai.complete_json(config, "s", "u", SCHEMA, 100)
+    assert sent[0]["enable_thinking"] is False
+    monkeypatch.setenv("AI_THINKING", "on")
+    ai.complete_json(config, "s", "u", SCHEMA, 100)
+    assert "enable_thinking" not in sent[1]
+
+
+def test_other_providers_get_no_thinking_switch(monkeypatch):
+    sent = _post_recorder(monkeypatch, [200])
+    ai.complete_json(ai.AIConfig("deepseek", "deepseek-chat", "k", "http://x/v1"), "s", "u", SCHEMA, 100)
+    assert "enable_thinking" not in sent[0]
+
+
+def test_a_rate_limited_model_falls_back_once(monkeypatch):
+    monkeypatch.delenv("AI_FALLBACK_MODEL", raising=False)
+    sent = _post_recorder(monkeypatch, [429, 200])
+    config = ai.AIConfig("alibaba_token_plan", "qwen3.8-max", "k", "http://x/v1")
+    assert ai.complete_json(config, "s", "u", SCHEMA, 100) == {"ok": True}
+    assert [body["model"] for body in sent] == ["qwen3.8-max", "qwen3.8-flash"]
+
+
+def test_a_bad_key_is_not_retried_on_another_model(monkeypatch):
+    sent = _post_recorder(monkeypatch, [401, 200])
+    config = ai.AIConfig("alibaba_token_plan", "qwen3.8-max", "k", "http://x/v1")
+    with pytest.raises(ai.AIError, match="401"):
+        ai.complete_json(config, "s", "u", SCHEMA, 100)
+    assert len(sent) == 1
+
+
+def test_when_the_fallback_fails_too_both_are_named(monkeypatch):
+    monkeypatch.setenv("AI_FALLBACK_MODEL", "backup-model")
+    _post_recorder(monkeypatch, [503, 503])
+    config = ai.AIConfig("deepseek", "deepseek-chat", "k", "http://x/v1")
+    with pytest.raises(ai.AIError, match="backup-model failed too"):
+        ai.complete_json(config, "s", "u", SCHEMA, 100)

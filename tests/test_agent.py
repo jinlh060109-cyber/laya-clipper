@@ -154,3 +154,39 @@ def test_real_agent_loads_and_rates_one_clip():
     assert set(rated["answers"]) == set(QUESTIONS)
     assert 0.0 <= rated["score"] <= 1.0
     assert rated["answers"]["kind"]["value"] in QUESTIONS["kind"]["criteria"]
+
+
+def _snapshot(cache, repo, name, files, age):
+    import os as _os
+    snap = cache / f"models--{repo.replace('/', '--')}" / "snapshots" / name
+    snap.mkdir(parents=True)
+    for f in files:
+        (snap / f).write_text("x")
+    _os.utime(snap, (age, age))
+    return snap
+
+
+def test_the_newest_complete_cached_snapshot_is_found(tmp_path):
+    from clipper.agent import cached_snapshot
+    _snapshot(tmp_path, "org/laya", "old", ["rl_agent_config.json", "model.safetensors"], 1000)
+    good = _snapshot(tmp_path, "org/laya", "mid", ["rl_agent_config.json", "model.safetensors"], 2000)
+    _snapshot(tmp_path, "org/laya", "broken", ["model.safetensors"], 3000)  # half-downloaded
+    assert cached_snapshot("org/laya", cache=tmp_path) == good
+    assert cached_snapshot("org/other", cache=tmp_path) is None
+
+
+def test_a_failed_download_falls_back_to_the_cached_copy(tmp_path, monkeypatch):
+    from clipper import agent as agent_mod
+    good = _snapshot(tmp_path, "org/laya", "mid", ["rl_agent_config.json", "model.safetensors"], 2000)
+    monkeypatch.setattr(agent_mod, "cached_snapshot", lambda repo, subfolder=None: good)
+    calls = []
+
+    def loader(repo, device, subfolder):
+        calls.append(repo)
+        if repo == "org/laya":
+            raise OSError("[WinError 1314] symlink privilege")
+        return FakeLoaded(device=device)
+
+    with pytest.warns(RuntimeWarning, match="cached copy"):
+        agent_mod.load_agent("en", QUESTIONS, device="cpu", repo="org/laya", loader=loader)
+    assert calls == ["org/laya", str(good)]

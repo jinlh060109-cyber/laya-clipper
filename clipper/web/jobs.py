@@ -34,13 +34,19 @@ class Job:
     progress: dict | None = None
     started: float = field(default_factory=time.time)
     finished: float | None = None
+    # Seconds each finished stage took, and when the running one began, so
+    # the page can say "running 42 s" instead of a bare "running".
+    timings: dict = field(default_factory=dict)
+    stage_started: float | None = None
 
     def snapshot(self) -> dict:
         return {"state": self.state, "kind": self.kind, "run": self.run.root.name,
                 "run_dir": str(self.run.root), "stages": dict(self.stages),
                 "error": self.error, "failed_stage": self.failed_stage,
                 "result": self.result, "progress": self.progress,
-                "started": self.started, "finished": self.finished}
+                "started": self.started, "finished": self.finished,
+                "timings": dict(self.timings), "stage_started": self.stage_started,
+                "now": time.time()}
 
 
 class JobRunner:
@@ -136,15 +142,19 @@ class JobRunner:
             pass
 
     def _step(self, job: Job, name: str, fn: Callable[[], Any]) -> Any:
-        self._update(job, stage=(name, "running"))
+        began = time.time()
+        self._update(job, stage=(name, "running"), stage_started=began, progress=None)
         try:
             value = fn()
         except Exception as exc:  # noqa: BLE001 - every failure is reported, not raised
+            job.timings[name] = round(time.time() - began, 1)
             self._update(job, stage=(name, "failed"), state="failed",
                          error=str(exc) or type(exc).__name__, failed_stage=name,
-                         finished=time.time())
+                         finished=time.time(), stage_started=None)
             raise _Stopped from exc
-        self._update(job, stage=(name, "done"))
+        with self._lock:
+            job.timings[name] = round(time.time() - began, 1)
+        self._update(job, stage=(name, "done"), stage_started=None)
         return value
 
     def _reporter(self, job: Job, stage: str) -> Callable[[int, int], None]:

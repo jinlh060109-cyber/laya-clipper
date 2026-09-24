@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import warnings
 
 from clipper.device import resolve_device
@@ -104,6 +105,7 @@ def load_agent(language: str | None, questions, device: str | None = None,
                 "laya is not installed. Install it with: pip install laya"
             ) from exc
 
+    fell_back = None
     with warnings.catch_warnings():
         # Laya's own temperature warning is re-derived below against the buckets
         # this profile actually reaches, so suppress the blanket one.
@@ -111,11 +113,27 @@ def load_agent(language: str | None, questions, device: str | None = None,
         try:
             agent = loader(repo, device=requested, subfolder=subfolder)
         except Exception as exc:  # noqa: BLE001
-            raise AgentError(
-                f"Could not load Laya checkpoint {repo!r}"
-                f"{f' (subfolder {subfolder!r})' if subfolder else ''}: {exc}"
-            ) from exc
+            # A new upstream revision can fail to download (offline, or on
+            # Windows without symlink rights: WinError 1314) while an older,
+            # complete copy sits in the cache. Use that rather than stop.
+            cached = cached_snapshot(repo, subfolder)
+            if cached is None:
+                raise AgentError(
+                    f"Could not load Laya checkpoint {repo!r}"
+                    f"{f' (subfolder {subfolder!r})' if subfolder else ''}: {exc}"
+                ) from exc
+            try:
+                agent = loader(str(cached), device=requested, subfolder=subfolder)
+            except Exception as again:  # noqa: BLE001
+                raise AgentError(
+                    f"Could not load Laya checkpoint {repo!r} ({exc}), nor the cached "
+                    f"copy at {cached} ({again})."
+                ) from again
+            fell_back = f"Laya could not fetch the latest {repo!r} ({exc}); using the " \
+                        f"cached copy {cached.name}."
 
+    if fell_back:
+        warnings.warn(fell_back, RuntimeWarning, stacklevel=2)
     actual = str(getattr(agent, "device", requested))
     if actual != requested:
         warnings.warn(
@@ -139,6 +157,27 @@ def load_agent(language: str | None, questions, device: str | None = None,
         "uncalibrated_buckets": bad,
     }
     return agent, meta
+
+
+def cached_snapshot(repo: str, subfolder: str | None = None,
+                    cache: Path | None = None) -> Path | None:
+    """The newest fully downloaded snapshot of `repo` in the Hugging Face
+    cache, or None. Complete means it holds the agent config and weights."""
+    if "/" not in repo or Path(repo).exists():
+        return None
+    if cache is None:
+        home = os.environ.get("HF_HUB_CACHE") or os.path.join(
+            os.environ.get("HF_HOME") or os.path.join(Path.home(), ".cache", "huggingface"), "hub")
+        cache = Path(home)
+    snapshots = cache / f"models--{repo.replace('/', '--')}" / "snapshots"
+    if not snapshots.is_dir():
+        return None
+    complete = []
+    for snap in snapshots.iterdir():
+        folder = snap / subfolder if subfolder else snap
+        if (folder / "rl_agent_config.json").is_file() and (folder / "model.safetensors").is_file():
+            complete.append(snap)
+    return max(complete, key=lambda p: p.stat().st_mtime, default=None)
 
 
 def _revision(repo: str) -> str:

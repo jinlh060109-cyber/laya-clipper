@@ -186,21 +186,27 @@ def run_edit(run: Run, style: dict, fills: dict | None = None,
         vertical = style["vertical"]
         out_height = 1920 if vertical else height
         final = folder / "final.mp4"
+        # The AI's punch-in moments become real zooms when the style asks.
+        zooms = ([p["at"] for p in spec["punch_ins"]]
+                 if style.get("punch_ins", True) else None)
+        fps = float(source_meta["video"].get("fps") or 30.0)
         if style["captions"] == "burn" and cues:
             ass = render_ass(cues, out_height, uppercase=style["caption_case"] == "upper",
                              layout=style["layout"], preset=preset)
             with staged_subtitles(ass, ".ass") as staged:
                 chain = build_filter_chain(width, height, vertical, Path(staged.name),
-                                           layout=style["layout"])
+                                           layout=style["layout"], punch_ins=zooms, fps=fps)
                 _ffmpeg(final_command(ffmpeg, source, start, end, final, chain, encoder),
                         final, cwd=staged.parent)
         else:
-            chain = build_filter_chain(width, height, vertical, None, layout=style["layout"])
+            chain = build_filter_chain(width, height, vertical, None, layout=style["layout"],
+                                       punch_ins=zooms, fps=fps)
             _ffmpeg(final_command(ffmpeg, source, start, end, final, chain, encoder), final)
 
         done.append({"id": clip["id"], "folder": stem, "title": spec["title"],
                      "duration": round(end - start, 2), "layout": style["layout"],
-                     "encoder": encoder, "final": f"clips/{stem}/final.mp4",
+                     "encoder": encoder, "punch_ins": len(zooms or []),
+                     "final": f"clips/{stem}/final.mp4",
                      "prompt": f"clips/{stem}/prompt.md"})
         if progress is not None:
             progress(index, len(clips))

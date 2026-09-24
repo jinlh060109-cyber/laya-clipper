@@ -34,6 +34,28 @@ def subtitles_expression(path: Path) -> str:
 
 
 LAYOUTS = ("fit", "crop")
+PUNCH_ZOOM = 0.15    # how far in a punch-in goes: 1.15x
+PUNCH_RAMP = 0.2     # seconds to zoom in, and again to zoom out
+PUNCH_HOLD = 1.2     # seconds held at full zoom
+
+
+def punch_in_expression(times: list[float], width: int, height: int, fps: float) -> str:
+    """A quick centred zoom at each time (seconds from the clip's start).
+
+    Each punch-in ramps in over PUNCH_RAMP s, holds, and ramps out, so the cut
+    feels like a camera push, not a jump. Overlapping ones merge (max)."""
+    ramps = []
+    for at in sorted(times)[:6]:
+        end = at + 2 * PUNCH_RAMP + PUNCH_HOLD
+        ramps.append(f"max(0,min(1,min((it-{at:.3f})/{PUNCH_RAMP},({end:.3f}-it)/{PUNCH_RAMP})))")
+    level = ramps[0]
+    for ramp in ramps[1:]:
+        level = f"max({level},{ramp})"
+    # Single quotes keep the commas inside the expression away from the
+    # filter graph parser; zoompan evaluates `z` once per frame.
+    zoom = f"1+{PUNCH_ZOOM}*{level}"
+    return (f"zoompan=z='{zoom}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":s={width}x{height}:fps={fps:g}")
 
 
 def fit_expression() -> str:
@@ -48,7 +70,9 @@ def fit_expression() -> str:
 
 def build_filter_chain(width: int, height: int, vertical: bool,
                        subtitle_path: Path | None,
-                       crop_x: str | int = "center", layout: str = "crop") -> str | None:
+                       crop_x: str | int = "center", layout: str = "crop",
+                       punch_ins: list[float] | None = None, fps: float = 30.0) -> str | None:
+    """Layout, then punch-in zooms, then captions on top (they never zoom)."""
     if layout not in LAYOUTS:
         raise ValueError(f"Unknown layout {layout!r}. Valid: {', '.join(LAYOUTS)}.")
     parts: list[str] = []
@@ -59,6 +83,10 @@ def build_filter_chain(width: int, height: int, vertical: bool,
         if crop:
             parts.append(crop)
         parts.append(f"scale={VERTICAL_W}:{VERTICAL_H}")
+    if punch_ins:
+        out_w, out_h = (VERTICAL_W, VERTICAL_H) if vertical else (width - width % 2,
+                                                                  height - height % 2)
+        parts.append(punch_in_expression(punch_ins, out_w, out_h, fps))
     if subtitle_path is not None:
         parts.append(subtitles_expression(subtitle_path))
     return ",".join(parts) if parts else None
