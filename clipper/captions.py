@@ -269,27 +269,41 @@ def _wrap_title(text: str, max_chars: int) -> str:
     return " ".join(words[:best]) + "\\N" + " ".join(words[best:])
 
 
+def _placement(layout: str, height: int) -> tuple[int, int, int]:
+    """Where captions and the hook title go for a layout, on a vertical
+    (1920-high) render: (caption alignment, caption bottom margin, title top
+    margin). Captions sit just under a picture that does not fill the frame,
+    and on the seam between the two halves of a split screen."""
+    if height < 1920:
+        return 2, int(height * 0.08), int(height * 0.1)
+    if layout in ("fit", "black"):  # a 16:9 picture across the middle
+        return 2, int(height * 0.27), int(height * 0.2)
+    if layout == "square":  # a 1080x1080 picture across the middle
+        return 2, int(height * 0.16), int(height * 0.1)
+    if layout == "split":  # middle-centre: over the seam
+        return 5, 0, int(height * 0.06)
+    return 2, int(height * 0.08), int(height * 0.1)
+
+
 def render_ass(cues: list[Cue], height: int,
                speakers: dict[str, str] | None = None,
                uppercase: bool = False, layout: str = "crop",
                preset: str = "classic", hook: str = "",
                hook_seconds: float = HOOK_SECONDS) -> str:
-    """`layout="fit"` on a vertical render puts the captions just under the
-    picture, which then sits in the middle of the frame. `preset` is one of
+    """On a vertical render the layout decides where captions sit (see
+    _placement). `preset` is one of
     CAPTION_STYLES. A `hook` is shown as a boxed title near the top for the
     first `hook_seconds`, fading out, so the first second already tells the
     viewer why to stay."""
     look = _preset(preset)
     uppercase = uppercase or look["upper"]
     size = int(font_size_for_height(height) * look["scale"])
-    under_picture = layout == "fit" and height >= 1920
-    margin = int(height * (0.27 if under_picture else 0.08))
+    align, margin, title_margin = _placement(layout, height)
     caption_style = (
         f"Style: Caption,{look['font']},{size},{look['primary']},{look['secondary']},"
         f"{look['outline_colour']},{look['back']},{-1 if look['bold'] else 0},0,0,0,"
-        f"100,100,0,0,{look['border']},{look['outline']},{look['shadow']},2,60,60,{margin},1")
+        f"100,100,0,0,{look['border']},{look['outline']},{look['shadow']},{align},60,60,{margin},1")
     title_size = int(font_size_for_height(height) * 1.5)
-    title_margin = int(height * (0.2 if under_picture else 0.1))
     title_style = (
         f"Style: Title,{look['font']},{title_size},&H00FFFFFF,&H00FFFFFF,&HC0000000,"
         f"&HC0000000,-1,0,0,0,100,100,0,0,3,16,0,8,80,80,{title_margin},1")

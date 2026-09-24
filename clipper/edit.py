@@ -2,7 +2,7 @@
 
 Each clip gets its own folder under clips/:
   cut.mp4       the untouched cut, for any editor to start from
-  final.mp4     the default edit: layout (fit or crop), captions, encoder
+  final.mp4     the default edit: layout (fit, crop, black, square, split), captions, encoder
   edit.json     the structured edit instruction (step 9)
   prompt.md     the same for an AI editor, with the style notes and words
   captions.srt  the clip's captions, when anyone speaks

@@ -42,14 +42,17 @@ def _analyze(page, server, video, prompt="", reload=True):
     return [p for p in server.runs.iterdir() if p.is_dir()][0]
 
 
-def _preview_png(page, look):
-    """Show the preview for `look` and return the JPEG bytes and its size."""
-    page.click("#preview-btn")
+def _preview_png(page):
+    """Wait until the preview shows the look now chosen on the page (no click:
+    choosing a look is enough) and return the JPEG bytes and its size."""
     page.wait_for_function(
-        "(look) => { const i = document.querySelector('#caption-preview');"
-        " return !i.hidden && (i.dataset.look || '').startsWith(look + '|')"
+        "() => { const i = document.querySelector('#caption-preview');"
+        " const v = (id) => document.getElementById(id).value;"
+        " const look = [v('caption_style'), v('caption_case'), v('layout'), v('captions'),"
+        "   document.getElementById('vertical').checked].join('|');"
+        " return !i.hidden && i.dataset.look === look && !i.classList.contains('stale')"
         " && i.complete && i.naturalWidth > 0; }",
-        arg=look, timeout=60_000)
+        timeout=60_000)
     size = page.evaluate("[document.querySelector('#caption-preview').naturalWidth,"
                          " document.querySelector('#caption-preview').naturalHeight]")
     return page.evaluate("""async () => {
@@ -74,12 +77,25 @@ def test_no_ai_flow_from_upload_to_captioned_clips(artifacts, page, start_server
     frames = {}
     for look in looks:
         page.select_option("#caption_style", look)
-        data, size = _preview_png(page, look)
+        data, size = _preview_png(page)
         assert data[:2] == [0xFF, 0xD8], look  # JPEG
         assert size == [540, 960], (look, size)  # half-size 9:16
         frames[look] = bytes(data)
         artifacts.save_bytes(f"previews/{look}.jpg", frames[look])
     assert len(set(frames.values())) == len(looks), "two looks rendered the same frame"
+
+    # Every layout shows at once on choosing it, each a different 9:16 frame.
+    layouts = page.eval_on_selector_all("#layout option", "els => els.map(e => e.value)")
+    assert set(layouts) >= {"fit", "crop", "black", "square", "split"}
+    shots = {}
+    for layout in layouts:
+        page.select_option("#layout", layout)
+        data, size = _preview_png(page)
+        assert size == [540, 960], (layout, size)
+        shots[layout] = bytes(data)
+        artifacts.save_bytes(f"layouts/{layout}.jpg", shots[layout])
+    assert len(set(shots.values())) == len(layouts), "two layouts rendered the same frame"
+    page.select_option("#layout", "fit")
 
     # Make only the first clip, in the bold look, and check the file.
     page.select_option("#caption_style", "bold")
@@ -135,7 +151,8 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(artifacts, page, 
     # The user picks a provider, types a key and tests it straight away,
     # without saving first. A wrong key is caught before any analysis.
     page.select_option("#ai-provider", creds["provider"])
-    page.fill("#ai-model", creds["model"])
+    page.select_option("#ai-model-pick", creds["model"])
+    assert not page.is_visible("#ai-model")  # one model field: the list
     page.fill("#ai-key", "sk-sp-" + "x" * 24)
     assert page.is_visible("#ai-pending")
     page.click("#ai-test")
@@ -143,6 +160,14 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(artifacts, page, 
     assert "No AI" not in page.inner_text("#ai-result"), page.inner_text("#ai-result")
 
     page.fill("#ai-key", creds["key"])
+    # With the real key, the list comes from the provider itself.
+    page.dispatch_event("#ai-key", "change")
+    page.wait_for_function("() => /models available/.test(document.querySelector('#ai-models-state').textContent)",
+                           timeout=60_000)
+    listed = page.eval_on_selector_all("#ai-model-pick option", "els => els.map(e => e.value)")
+    assert creds["model"] in listed, listed
+    artifacts.save_bytes("provider-models.txt", "\n".join(listed).encode())
+    page.select_option("#ai-model-pick", creds["model"])
     page.click("#ai-test")
     page.wait_for_function("() => document.querySelector('#ai-result').textContent.startsWith('Works')",
                            timeout=120_000)

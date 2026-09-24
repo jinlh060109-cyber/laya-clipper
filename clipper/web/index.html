@@ -80,6 +80,7 @@
   details.panel > summary { cursor: pointer; font-weight: 600; }
   details.panel[open] > summary { margin-bottom: 14px; }
   #caption-preview-box { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #caption-preview.stale { opacity: .5; transition: opacity .1s; }
   #caption-preview { max-width: 270px; max-height: 480px; border-radius: 8px; background: #000;
                      border: 1px solid var(--line); }
   [hidden] { display: none !important; }
@@ -185,8 +186,11 @@
     <div>
       <label for="layout">Layout</label>
       <select id="layout">
-        <option value="fit">Fit: keep the whole picture over a blurred background</option>
+        <option value="fit">Fit: whole picture over a blurred background</option>
         <option value="crop">Crop: fill the screen (cuts the sides)</option>
+        <option value="black">Letterbox: whole picture on black</option>
+        <option value="square">Square: large centred square over a blur</option>
+        <option value="split">Split screen: left half on top, right half below (two people)</option>
       </select>
     </div>
     <div>
@@ -225,7 +229,6 @@
           <div class="row" style="margin-top:8px">
             <label for="preview-clip" style="margin:0">Preview on</label>
             <select id="preview-clip" style="width:auto"></select>
-            <button id="preview-btn" class="quiet">Show preview</button>
           </div>
           <div id="preview-state" class="hint">A single frame of the clip, with this layout and caption look.</div>
         </div>
@@ -624,6 +627,7 @@ async function loadPreview(run, showMade) {
   $("preview").hidden = $("style").hidden = false;
   $("make").disabled = false;
   if (showMade) showResults(run, data.made);
+  showPreview();  // the look is visible as soon as there are clips
 }
 
 function showResults(run, made) {
@@ -672,39 +676,48 @@ async function saveStyle() {
   } catch (error) { $("saved").textContent = error.message; }
 }
 
-let previewUrl = null, previewSeq = 0, previewTimer = null;
+// Rendered frames are kept per run+clip+look, so going back to a look
+// already seen is instant; a new look is rendered at once on choosing it.
+const previewCache = new Map();
+let previewSeq = 0;
+function paintPreview(url, look, clip) {
+  const img = $("caption-preview");
+  img.dataset.look = look;
+  img.src = url; img.hidden = false;
+  $("preview-state").className = "hint";
+  $("preview-state").textContent = "Preview of " + clip + ".";
+}
 async function showPreview() {
   if (!current || !$("preview-clip").value) return;
-  const s = styleNow();
-  const q = new URLSearchParams({ run: current, clip: $("preview-clip").value, layout: s.layout,
+  const s = styleNow(), clip = $("preview-clip").value;
+  const look = s.caption_style + "|" + s.caption_case + "|" + s.layout + "|" + s.captions + "|" + s.vertical;
+  const key = current + "|" + clip + "|" + look;
+  const seq = ++previewSeq;
+  if (previewCache.has(key)) return paintPreview(previewCache.get(key), look, clip);
+  const q = new URLSearchParams({ run: current, clip, layout: s.layout,
     captions: s.captions, caption_style: s.caption_style, caption_case: s.caption_case,
     vertical: s.vertical ? "1" : "0" });
-  // Only the newest request may paint: quick changes must not leave an
-  // older look on screen when its answer arrives last.
-  const seq = ++previewSeq;
+  // The old frame stays, dimmed, until the new one arrives. Only the newest
+  // request may paint: quick changes must not leave an older look on screen.
+  $("caption-preview").classList.add("stale");
   $("preview-state").className = "hint"; $("preview-state").textContent = "Rendering one frame…";
   try {
     const response = await fetch("/api/preview?" + q);
     if (!response.ok) throw new Error((await response.json()).error || response.statusText);
-    const blob = await response.blob();
+    const url = URL.createObjectURL(await response.blob());
+    previewCache.set(key, url);
     if (seq !== previewSeq) return;
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = URL.createObjectURL(blob);
-    const img = $("caption-preview");
-    img.dataset.look = s.caption_style + "|" + s.caption_case + "|" + s.layout + "|" + s.captions + "|" + s.vertical;
-    img.src = previewUrl; img.hidden = false;
-    $("preview-state").textContent = "Preview of " + $("preview-clip").value + ".";
+    paintPreview(url, look, clip);
   } catch (error) {
     if (seq !== previewSeq) return;
     $("preview-state").className = "warn"; $("preview-state").textContent = error.message;
+  } finally {
+    if (seq === previewSeq) $("caption-preview").classList.remove("stale");
   }
 }
-// Refresh an open preview when the look changes.
+// Every change of look shows its preview right away.
 for (const id of ["caption_style", "caption_case", "layout", "captions", "vertical", "preview-clip"])
-  $(id).addEventListener("change", () => {
-    if ($("caption-preview").hidden) return;
-    clearTimeout(previewTimer); previewTimer = setTimeout(showPreview, 150);
-  });
+  $(id).addEventListener("change", showPreview);
 
 function poll() {
   clearInterval(polling);
@@ -726,7 +739,6 @@ $("device").addEventListener("change", showDevice);
 $("analyze").addEventListener("click", analyze);
 $("make").addEventListener("click", make);
 $("save-style").addEventListener("click", saveStyle);
-$("preview-btn").addEventListener("click", showPreview);
 $("ai-provider").addEventListener("change", () => showProvider());
 for (const id of ["ai-model", "ai-key", "ai-url"]) $(id).addEventListener("input", showAIPending);
 $("ai-model-pick").addEventListener("change", () => {

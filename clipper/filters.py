@@ -33,7 +33,14 @@ def subtitles_expression(path: Path) -> str:
     return "subtitles=" + text.replace(":", r"\:")
 
 
-LAYOUTS = ("fit", "crop")
+# Vertical 9:16 layouts, as offered by clip tools (OpusClip, Vizard, CapCut):
+#   fit     the whole picture across the width, over a blurred copy of itself
+#   crop    fill the screen from the centre (the sides are cut)
+#   black   the whole picture across the width, on black (clean letterbox)
+#   square  a centred 1:1 crop, large, over a blurred copy (captions below it)
+#   split   left half on top, right half below: two people side by side in a
+#           wide shot each get half of the vertical screen (podcasts, interviews)
+LAYOUTS = ("fit", "crop", "black", "square", "split")
 PUNCH_ZOOM = 0.15    # how far in a punch-in goes: 1.15x
 PUNCH_RAMP = 0.2     # seconds to zoom in, and again to zoom out
 PUNCH_HOLD = 1.2     # seconds held at full zoom
@@ -68,6 +75,37 @@ def fit_expression() -> str:
             f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,format=yuv420p")
 
 
+def black_expression() -> str:
+    """The whole frame inside 1080x1920, on black."""
+    return (f"scale={VERTICAL_W}:{VERTICAL_H}:force_original_aspect_ratio=decrease,"
+            f"pad={VERTICAL_W}:{VERTICAL_H}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p")
+
+
+def square_expression() -> str:
+    """A centred square of the frame, full width, over a blurred copy."""
+    return (f"split=2[bg][fg];"
+            f"[bg]scale={VERTICAL_W}:{VERTICAL_H}:force_original_aspect_ratio=increase,"
+            f"crop={VERTICAL_W}:{VERTICAL_H},boxblur=20:2[bgb];"
+            f"[fg]crop='min(iw,ih)':'min(iw,ih)',scale={VERTICAL_W}:{VERTICAL_W}[fgs];"
+            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,format=yuv420p")
+
+
+def split_expression(width: int, height: int) -> str:
+    """Each half of a wide frame, cropped to 9:8 around its centre, stacked:
+    left on top, right below, each 1080x960."""
+    half = width // 2
+    crop_w = min(half, int(height * 9 / 8)) // 2 * 2
+    crop_h = min(height, int(crop_w * 8 / 9)) // 2 * 2
+    y = (height - crop_h) // 2
+    left_x = (half - crop_w) // 2
+    right_x = half + (half - crop_w) // 2
+    tile = f"scale={VERTICAL_W}:{VERTICAL_H // 2},setsar=1"
+    return (f"split=2[l][r];"
+            f"[l]crop={crop_w}:{crop_h}:{left_x}:{y},{tile}[top];"
+            f"[r]crop={crop_w}:{crop_h}:{right_x}:{y},{tile}[bottom];"
+            f"[top][bottom]vstack=inputs=2,format=yuv420p")
+
+
 def build_filter_chain(width: int, height: int, vertical: bool,
                        subtitle_path: Path | None,
                        crop_x: str | int = "center", layout: str = "crop",
@@ -76,8 +114,15 @@ def build_filter_chain(width: int, height: int, vertical: bool,
     if layout not in LAYOUTS:
         raise ValueError(f"Unknown layout {layout!r}. Valid: {', '.join(LAYOUTS)}.")
     parts: list[str] = []
-    if vertical and layout == "fit" and int(height * 9 / 16) < width:
+    wide = int(height * 9 / 16) < width
+    if vertical and layout == "fit" and wide:
         parts.append(fit_expression())
+    elif vertical and layout == "black":
+        parts.append(black_expression())
+    elif vertical and layout == "square":
+        parts.append(square_expression())
+    elif vertical and layout == "split" and width >= height:
+        parts.append(split_expression(width, height))
     elif vertical:
         crop = crop_expression(width, height, crop_x)
         if crop:

@@ -114,7 +114,11 @@ once on `AI_FALLBACK_MODEL` (default `qwen3.8-flash` on the Token Plan).
 **Layouts.** `fit` (default) keeps the whole picture, centred over a blurred
 copy of itself, so on-screen text and motion graphics are never cut off.
 `crop` fills the vertical frame and cuts the sides (best for one face in the
-middle).
+middle). `black` is the whole picture on black, a clean letterbox. `square`
+shows a large centred square over the blur. `split` puts the left half of the
+frame on top and the right half below, for two people side by side in a wide
+shot (podcasts, interviews); captions sit on the seam. The preview on the page
+changes as soon as a layout or caption look is chosen.
 
 From the command line:
 
