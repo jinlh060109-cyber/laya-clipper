@@ -29,8 +29,9 @@ def _open(page, server):
     page.wait_for_selector("body[data-ready]")
 
 
-def _analyze(page, server, video, prompt=""):
-    _open(page, server)
+def _analyze(page, server, video, prompt="", reload=True):
+    if reload:
+        _open(page, server)
     page.set_input_files("#file", str(video))
     page.select_option("#model", "small")
     if prompt:
@@ -131,29 +132,31 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(artifacts, page, 
     page.click("#ai-panel summary")
     assert page.inner_text("#ai-summary").startswith("none")
 
-    # A wrong key is caught by the connection test, before any analysis.
+    # The user picks a provider, types a key and tests it straight away,
+    # without saving first. A wrong key is caught before any analysis.
     page.select_option("#ai-provider", creds["provider"])
     page.fill("#ai-model", creds["model"])
-    page.fill("#ai-key", "sk-sp-definitely-wrong")
-    page.click("#ai-save")
-    page.wait_for_selector("#ai-result.ok")
+    page.fill("#ai-key", "sk-sp-" + "x" * 24)
+    assert page.is_visible("#ai-pending")
     page.click("#ai-test")
     page.wait_for_selector("#ai-result.warn", timeout=120_000)
+    assert "No AI" not in page.inner_text("#ai-result"), page.inner_text("#ai-result")
 
     page.fill("#ai-key", creds["key"])
-    page.click("#ai-save")
-    page.wait_for_selector("#ai-result.ok")
     page.click("#ai-test")
     page.wait_for_function("() => document.querySelector('#ai-result').textContent.startsWith('Works')",
                            timeout=120_000)
-    env_text = (server.workdir / ".env").read_text(encoding="utf-8")
-    assert f"{creds['key_env']}={creds['key']}" in env_text
-    page_html = page.content()
-    assert creds["key"] not in page_html  # the key never comes back to the page
+    assert not (server.workdir / ".env").exists()  # tested, not saved
+    assert page.inner_text("#ai-summary").endswith("(not saved)")
 
-    run = _analyze(page, server, source_video, prompt="the funniest moment")
+    # Analyzing uses what the form shows, still without "Use this AI".
+    run = _analyze(page, server, source_video, prompt="the funniest moment", reload=False)
     artifacts.watch(run)
     assert "Clips proposed by" in page.inner_text("#preview-summary")
+    env_text = (server.workdir / ".env").read_text(encoding="utf-8")
+    assert f"{creds['key_env']}={creds['key']}" in env_text
+    assert page.is_hidden("#ai-pending")
+    assert creds["key"] not in page.content()  # the key never comes back to the page
 
     # AI fill-in on one clip writes the title into the edit.
     boxes, fills = page.locator("#rows .include"), page.locator("#rows .fill")

@@ -363,6 +363,25 @@ def test_a_failing_ai_connection_says_why(server, monkeypatch):
     assert status == 400 and b"rejected the API key" in body
 
 
+def test_the_form_can_be_tested_before_it_is_saved(server, monkeypatch):
+    import clipper.ai
+    base, tmp_path, *_ = server
+    asked = []
+    monkeypatch.setattr(clipper.ai, "complete_json",
+                        lambda config, *a: asked.append(config) or {"ok": True})
+    form = {"provider": "alibaba_token_plan", "model": "qwen3.8-max", "api_key": "sk-sp-typed"}
+    status, body = call("POST", base + "/api/ai/test", json.dumps(form).encode(),
+                        {"Content-Type": "application/json"})
+    assert status == 200 and json.loads(body)["provider"] == "alibaba_token_plan"
+    assert asked[0].api_key == "sk-sp-typed" and b"sk-sp-typed" not in body
+    # Testing is not saving: no .env, and the AI in use is still none.
+    assert not (tmp_path / ".env").exists()
+    assert jcall("GET", base + "/api/config")[1]["ai"]["active"] is None
+    status, body = call("POST", base + "/api/ai/test", b'{"provider": "alibaba_token_plan"}',
+                        {"Content-Type": "application/json"})
+    assert status == 400 and b"ALIBABA_TOKEN_PLAN_API_KEY" in body  # typed nothing, saved nothing
+
+
 @pytest.mark.parametrize("method, path", [("PUT", "/api/ai"), ("POST", "/api/analyze"),
                                           ("POST", "/api/make"), ("PUT", "/api/style")])
 def test_other_websites_cannot_change_settings_or_start_jobs(server, method, path):

@@ -121,6 +121,7 @@
         <button id="ai-save">Use this AI</button>
         <button id="ai-test" class="quiet">Test connection</button>
         <span id="ai-result" class="hint"></span>
+        <div id="ai-pending" class="hint" hidden>Not in use yet: click “Use this AI”. Analyzing also uses what is shown here.</div>
       </div>
       <div class="full hint">Keys are stored in the local <code>.env</code> file and never sent back to the page.
         Each provider keeps its own key, so switching back and forth needs no retyping.</div>
@@ -294,6 +295,7 @@ function showAI(ai, fillForm) {
   $("ai-summary").textContent = ai.active ? providerLabel(ai.active.provider) + " · " + ai.active.model
     : ai.error ? "needs attention" : "none (no AI)";
   if (ai.error) $("ai-panel").open = true;
+  $("ai-pending").hidden = true;
   for (const box of document.querySelectorAll("#rows .fill")) {
     box.disabled = !aiReady; box.title = aiReady ? "" : "Needs an AI provider";
   }
@@ -305,6 +307,7 @@ function showAI(ai, fillForm) {
   const active = ai.providers.find((p) => p.active);
   select.value = active ? active.id : "none";
   showProvider(active && active.model);
+  showAIPending();
 }
 
 function showProvider(model) {
@@ -325,12 +328,11 @@ function showProvider(model) {
   $("ai-key").placeholder = p.has_key ? "A key is saved. Type a new one to replace it." : (p.key_hint || "Paste the key");
   $("ai-key-state").textContent = p.key_env === null ? "No key needed."
     : p.has_key ? "Key saved." : "No key saved yet" + (p.key_hint ? ": " + p.key_hint : ".");
+  showAIPending();
 }
 
-const send = (url, method, body) => json(url, { method, headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body || {}) });
-
-async function saveAI() {
+// The AI settings as they stand in the form, which may not be saved yet.
+function aiForm() {
   const provider = $("ai-provider").value;
   const body = { provider };
   if (provider !== "none") {
@@ -338,9 +340,47 @@ async function saveAI() {
     if ($("ai-key").value.trim()) body.api_key = $("ai-key").value.trim();
     if (!$("ai-url-row").hidden) body.base_url = $("ai-url").value.trim();
   }
+  return body;
+}
+
+// True when the form shows something other than the AI in use: another
+// provider or model, a new key, or a server address.
+function aiFormChanged() {
+  const form = aiForm(), active = config.ai.active;
+  if (form.provider === "none") return !!active;
+  return !active || active.provider !== form.provider || active.model !== form.model
+    || !!form.api_key || !!form.base_url;
+}
+
+function showAIPending() {
+  const pending = aiFormChanged();
+  $("ai-pending").hidden = !pending;
+  const form = aiForm();
+  $("ai-summary").textContent = pending
+    ? (form.provider === "none" ? "none (no AI)" : providerLabel(form.provider) + " · " + (form.model || "?")) + " (not saved)"
+    : config.ai.active ? providerLabel(config.ai.active.provider) + " · " + config.ai.active.model
+    : config.ai.error ? "needs attention" : "none (no AI)";
+}
+
+// Analyze and Make use what the form shows: an unsaved choice is saved first.
+async function applyAIForm() {
+  if (!aiFormChanged()) return;
+  try {
+    showAI(await send("/api/ai", "PUT", aiForm()), true);
+  } catch (error) {
+    $("ai-panel").open = true;
+    $("ai-result").className = "warn"; $("ai-result").textContent = error.message;
+    throw new Error("The AI settings could not be used: " + error.message);
+  }
+}
+
+const send = (url, method, body) => json(url, { method, headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body || {}) });
+
+async function saveAI() {
   $("ai-result").className = "hint"; $("ai-result").textContent = "Saving…";
   try {
-    showAI(await send("/api/ai", "PUT", body), true);
+    showAI(await send("/api/ai", "PUT", aiForm()), true);
     $("ai-result").className = "ok"; $("ai-result").textContent = "Saved.";
   } catch (error) { $("ai-result").className = "warn"; $("ai-result").textContent = error.message; }
 }
@@ -348,9 +388,10 @@ async function saveAI() {
 async function testAI() {
   $("ai-result").className = "hint"; $("ai-result").textContent = "Asking the AI…";
   try {
-    const r = await send("/api/ai/test", "POST");
+    const r = await send("/api/ai/test", "POST", aiForm());
     $("ai-result").className = "ok";
-    $("ai-result").textContent = "Works: " + providerLabel(r.provider) + " answered with " + r.model + ".";
+    $("ai-result").textContent = "Works: " + providerLabel(r.provider) + " answered with " + r.model + "."
+      + (aiFormChanged() ? " Click \"Use this AI\" to keep it (or just analyze)." : "");
   } catch (error) { $("ai-result").className = "warn"; $("ai-result").textContent = error.message; }
 }
 
@@ -420,6 +461,7 @@ async function analyze() {
   buildStages(["upload", "ingest", "transcribe", "segment", "rate", "action", "select"], "Analyzing");
   setStage("upload", "running", "0%");
   try {
+    await applyAIForm();
     const run = await upload(file);
     setStage("upload", "done");
     const body = await json("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -551,6 +593,7 @@ async function make() {
   const choices = [...$("rows").children].map((tr) => ({ id: tr.dataset.id,
     include: tr.querySelector(".include").checked, fill_in: tr.querySelector(".fill").checked }));
   try {
+    await applyAIForm();
     const body = await json("/api/make", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ run: current, choices, style: styleNow() }) });
     render(body); poll();
@@ -624,6 +667,7 @@ $("make").addEventListener("click", make);
 $("save-style").addEventListener("click", saveStyle);
 $("preview-btn").addEventListener("click", showPreview);
 $("ai-provider").addEventListener("change", () => showProvider());
+for (const id of ["ai-model", "ai-key", "ai-url"]) $(id).addEventListener("input", showAIPending);
 $("ai-save").addEventListener("click", saveAI);
 $("ai-test").addEventListener("click", testAI);
 

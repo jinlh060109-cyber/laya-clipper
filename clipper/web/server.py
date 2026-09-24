@@ -71,15 +71,15 @@ class App:
                                    for sid, look in CAPTION_STYLES.items()],
                 "hf_token": bool(os.environ.get("HF_TOKEN")), "style": style.load()}
 
-    def save_ai(self, body: dict) -> dict:
-        """Choose the AI provider and model, and optionally store its key.
+    @staticmethod
+    def _form(body: dict) -> tuple[str, dict[str, str | None], ai.AIConfig | None]:
+        """The AI settings form as .env values, and the config they make.
 
-        Checked before anything is written: a provider that still lacks a
-        key or model is refused and the .env file is left as it was."""
+        Nothing is written and the process environment is left as it was; an
+        empty key field means "keep the saved key"."""
         provider = str(body.get("provider") or "").strip().lower()
         if provider == ai.NO_AI:
-            envfile.update({"AI_PROVIDER": ai.NO_AI}, self.env_path)
-            return self.ai_state()
+            return provider, {"AI_PROVIDER": ai.NO_AI}, None
         if provider not in ai.PROVIDERS:
             raise ValueError(f"Unknown AI provider {provider!r}. "
                              f"Valid: {', '.join(ai.PROVIDERS)}, {ai.NO_AI}.")
@@ -100,22 +100,37 @@ class App:
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
-            ai.config_for(provider)
+            config = ai.config_for(provider)
         finally:
             for name, value in before.items():
                 if value is None:
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
+        return provider, values, config
+
+    def save_ai(self, body: dict) -> dict:
+        """Choose the AI provider and model, and optionally store its key.
+
+        Checked before anything is written: a provider that still lacks a
+        key or model is refused and the .env file is left as it was."""
+        _, values, _ = self._form(body)
         envfile.update(values, self.env_path)
         return self.ai_state()
 
-    def test_ai(self) -> dict:
-        """One tiny request to the chosen AI, so a bad key shows up now and
-        not halfway through an analysis."""
-        config = ai.config_from_env()
-        if config is None:
-            raise ValueError("No AI is chosen. Pick a provider first.")
+    def test_ai(self, body: dict | None = None) -> dict:
+        """One tiny request to an AI, so a bad key shows up now and not
+        halfway through an analysis. With a form (`provider` set), that form
+        is tested as it stands on the page, without saving it; otherwise the
+        saved choice is."""
+        if body and body.get("provider"):
+            provider, _, config = self._form(body)
+            if config is None:
+                raise ValueError("\"No AI\" is selected, so there is nothing to test.")
+        else:
+            config = ai.config_from_env()
+            if config is None:
+                raise ValueError("No AI is in use. Pick a provider and click \"Use this AI\".")
         schema = {"type": "object", "properties": {"ok": {"type": "boolean"}},
                   "required": ["ok"], "additionalProperties": False}
         try:
@@ -421,8 +436,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             path = urlparse(self.path).path
             if path == "/api/ai/test":
                 try:
-                    self._body()
-                    self._json(200, app.test_ai())
+                    self._json(200, app.test_ai(self._body()))
                 except (ValueError, json.JSONDecodeError) as error:
                     self._json(400, {"error": str(error)})
                 return
