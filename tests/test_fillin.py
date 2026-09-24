@@ -33,3 +33,18 @@ def test_fill_in_reads_only_the_clip_and_clamps_punch_ins():
     assert seen["schema"] == fillin.SCHEMA
     assert out["title"] == "The trick"
     assert [p["at"] for p in out["punch_ins"]] == [0.8, 20.0]
+
+
+def test_an_empty_answer_is_asked_again_then_refused():
+    import pytest
+    from clipper.ai import AIConfig, AIError
+    from clipper.fillin import fill_in
+    empty = {"title": "", "hook": "", "description": "", "caption_quote": "", "punch_ins": []}
+    good = {**empty, "title": "Raccoon", "hook": "Something is outside"}
+    clip = {"id": "c0", "start": 0.0, "end": 5.0, "duration": 5.0}
+    config = AIConfig("deepseek", "m", "k", "http://x")
+    answers = iter([empty, good])
+    assert fill_in(config, clip, {"segments": []}, "", complete=lambda *a: next(answers))["hook"] \
+        == "Something is outside"
+    with pytest.raises(AIError, match="empty fill-in for clip c0 twice"):
+        fill_in(config, clip, {"segments": []}, "", complete=lambda *a: empty)

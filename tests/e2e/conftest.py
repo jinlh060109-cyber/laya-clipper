@@ -9,6 +9,11 @@ The source video is the 99 s camping story (speech, 1920x1080). Point
 CLIPPER_E2E_VIDEO at another file to use that instead. Tests that need a
 real AI read ALIBABA_TOKEN_PLAN_API_KEY (or CLIPPER_E2E_AI_PROVIDER plus that
 provider's key) and are skipped without one.
+
+Every run leaves its evidence in e2e-artifacts/<timestamp>/<test>/: the clips
+it made (final.mp4, edit.json, captions, prompt.md), anything else a test
+saves, a screenshot of the page, the server log, and report.json with the
+outcome and the checked facts. Re-run the same command to reproduce it.
 """
 from __future__ import annotations
 
@@ -19,12 +24,15 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_VIDEO = ROOT / "runs" / "2026-09-23-camping-story" / "video.mp4"
+ARTIFACTS = ROOT / "e2e-artifacts"
+CLIP_FILES = ("final.mp4", "edit.json", "captions.srt", "captions.ass", "prompt.md")
 
 
 def ffprobe(path: Path) -> dict:
@@ -87,8 +95,80 @@ def _clean_env(workdir: Path, extra: dict | None = None) -> dict:
     return env
 
 
+class Artifacts:
+    """One test's evidence folder, and the facts it checked, for report.json."""
+
+    def __init__(self, folder: Path) -> None:
+        self.dir = folder
+        self.facts: dict = {}
+        self.run: Path | None = None
+
+    def watch(self, run: Path) -> None:
+        """Save this run's clips when the test ends, whether it passed or not."""
+        self.run = run
+
+    def note(self, **facts) -> None:
+        self.facts.update(facts)
+
+    def save_bytes(self, name: str, data: bytes) -> Path:
+        path = self.dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def save_clips(self, run: Path) -> None:
+        """Copy every made clip, and record what ffprobe says about it."""
+        for final in sorted((run / "clips").glob("*/final.mp4")):
+            target = self.dir / "clips" / final.parent.name
+            target.mkdir(parents=True, exist_ok=True)
+            for name in CLIP_FILES:
+                if (final.parent / name).exists():
+                    shutil.copy2(final.parent / name, target / name)
+            probe = ffprobe(final)
+            video = next(s for s in probe["streams"] if s["codec_type"] == "video")
+            self.facts.setdefault("clips", {})[final.parent.name] = {
+                "size": [video["width"], video["height"]],
+                "duration": round(float(probe["format"]["duration"]), 2),
+                "audio": any(s["codec_type"] == "audio" for s in probe["streams"])}
+
+
+@pytest.fixture(scope="session")
+def artifact_root() -> Path:
+    folder = ARTIFACTS / time.strftime("%Y-%m-%d_%H%M%S")
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if report.when == "call" or (report.when == "setup" and report.outcome != "passed"):
+        item.e2e_outcome = report.outcome
+        item.e2e_error = str(report.longrepr)[-4000:] if report.failed else None
+
+
 @pytest.fixture
-def start_server(tmp_path):
+def artifacts(request, artifact_root, source_video):
+    evidence = Artifacts(artifact_root / request.node.name)
+    evidence.dir.mkdir(parents=True, exist_ok=True)
+    request.node.e2e_artifacts = evidence
+    yield evidence
+    if evidence.run is not None and (evidence.run / "clips").is_dir():
+        evidence.save_clips(evidence.run)
+        for name in ("fills.json", "job.json", "segments.json", "selection.json"):
+            if (evidence.run / name).exists():
+                shutil.copy2(evidence.run / name, evidence.dir / name)
+    report = {"test": request.node.nodeid,
+              "outcome": getattr(request.node, "e2e_outcome", "unknown"),
+              "error": getattr(request.node, "e2e_error", None),
+              "source_video": str(source_video), **evidence.facts}
+    (evidence.dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False),
+                                              encoding="utf-8")
+
+
+@pytest.fixture
+def start_server(request, tmp_path):
     servers: list[Server] = []
 
     def start(extra_env: dict | None = None, workdir: Path | None = None) -> Server:
@@ -99,8 +179,12 @@ def start_server(tmp_path):
         return server
 
     yield start
-    for server in servers:
+    evidence = getattr(request.node, "e2e_artifacts", None)
+    for index, server in enumerate(servers):
         server.stop()
+        if evidence is not None:
+            (evidence.dir / f"server{index or ''}.log").write_text(
+                "".join(server.log), encoding="utf-8")
 
 
 @pytest.fixture(scope="session")
@@ -113,13 +197,16 @@ def browser():
 
 
 @pytest.fixture
-def page(browser):
+def page(request, browser):
     context = browser.new_context(viewport={"width": 1200, "height": 1000})
     page = context.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     page.js_errors = errors
     yield page
+    evidence = getattr(request.node, "e2e_artifacts", None)
+    if evidence is not None and page.url.startswith("http"):
+        page.screenshot(path=str(evidence.dir / "page.png"), full_page=True)
     context.close()
     assert not errors, f"JavaScript errors on the page: {errors}"
 

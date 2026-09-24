@@ -57,9 +57,10 @@ def _preview_png(page, look):
     }"""), size
 
 
-def test_no_ai_flow_from_upload_to_captioned_clips(page, start_server, source_video):
+def test_no_ai_flow_from_upload_to_captioned_clips(artifacts, page, start_server, source_video):
     server = start_server()
     run = _analyze(page, server, source_video)
+    artifacts.watch(run)
     summary = page.inner_text("#preview-summary")
     assert "No AI" in summary
     rows = page.locator("#rows tr")
@@ -76,6 +77,7 @@ def test_no_ai_flow_from_upload_to_captioned_clips(page, start_server, source_vi
         assert data[:2] == [0xFF, 0xD8], look  # JPEG
         assert size == [540, 960], (look, size)  # half-size 9:16
         frames[look] = bytes(data)
+        artifacts.save_bytes(f"previews/{look}.jpg", frames[look])
     assert len(set(frames.values())) == len(looks), "two looks rendered the same frame"
 
     # Make only the first clip, in the bold look, and check the file.
@@ -101,6 +103,7 @@ def test_no_ai_flow_from_upload_to_captioned_clips(page, start_server, source_vi
     assert spec["caption_style"] == "bold"
     assert "bold look" in (finals[0].parent / "prompt.md").read_text(encoding="utf-8")
     assert (finals[0].parent / "captions.srt").read_text(encoding="utf-8").strip()
+    artifacts.note(looks=looks, preview_size=size, made_in="bold")
 
     # The style chosen on the page is remembered for the next visit.
     page.reload()
@@ -115,9 +118,11 @@ def test_no_ai_flow_from_upload_to_captioned_clips(page, start_server, source_vi
     assert out.returncode == 0, out.stderr
     spec = json.loads(next((run / "clips").glob("*/edit.json")).read_text(encoding="utf-8"))
     assert spec["caption_style"] == "one_word"
+    artifacts.note(cli_remade_in="one_word")
 
 
-def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(page, start_server, source_video):
+def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(artifacts, page, start_server,
+                                                               source_video):
     creds = ai_env()
     if creds is None:
         pytest.skip("No AI key in the environment")
@@ -147,6 +152,7 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(page, start_serve
     assert creds["key"] not in page_html  # the key never comes back to the page
 
     run = _analyze(page, server, source_video, prompt="the funniest moment")
+    artifacts.watch(run)
     assert "Clips proposed by" in page.inner_text("#preview-summary")
 
     # AI fill-in on one clip writes the title into the edit.
@@ -166,6 +172,9 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(page, start_serve
     assert abs(duration - spec["duration"]) < 0.5  # zooms never change the length
     ass = (final.parent / "captions.ass").read_text(encoding="utf-8")
     assert spec["hook"] and ",Title," in ass  # the AI's hook is on screen first
+    artifacts.note(provider=creds["provider"], model=creds["model"], title=spec["title"],
+                   hook=spec["hook"], punch_ins=[p["at"] for p in spec["punch_ins"]],
+                   timings=json.loads((run / "job.json").read_text(encoding="utf-8")).get("timings"))
 
     # Switching to "no AI" keeps the saved key.
     page.evaluate("document.querySelector('#ai-panel').open = true")

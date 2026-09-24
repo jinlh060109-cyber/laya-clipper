@@ -5,7 +5,7 @@ never the whole video, so each call stays small.
 """
 from __future__ import annotations
 
-from clipper.ai import AIConfig, complete_json
+from clipper.ai import AIConfig, AIError, complete_json
 from clipper.captions import join_words
 
 _STR = {"type": "string"}
@@ -52,7 +52,15 @@ def fill_in(config: AIConfig, clip: dict, transcript: dict, notes: str,
             f"Clip length: {clip['duration']:.1f} seconds\n"
             f"Style notes: {notes.strip() or '(none)'}\n\n"
             f"Transcript:\n{clip_slice(transcript, clip['start'], clip['end'])}")
-    answer = complete(config, SYSTEM, user, SCHEMA, 16000)
+    # Models occasionally return the schema with every field blank. That is a
+    # failed answer, not a clip without details: ask once more, then say so.
+    for _ in range(2):
+        answer = complete(config, SYSTEM, user, SCHEMA, 16000)
+        if str(answer.get("title") or "").strip() and str(answer.get("hook") or "").strip():
+            break
+    else:
+        raise AIError(f"{config.model} returned an empty fill-in for clip {clip.get('id')} "
+                      f"twice. Try again, pick another model, or switch fill-in off.")
     length = float(clip["duration"])
     punch_ins = []
     for item in answer.get("punch_ins") or []:
@@ -61,7 +69,7 @@ def fill_in(config: AIConfig, clip: dict, transcript: dict, notes: str,
         except (KeyError, TypeError, ValueError):
             continue
         punch_ins.append({"at": round(at, 2), "reason": str(item.get("reason") or "")})
-    return {"title": str(answer.get("title") or clip.get("title_hint") or "")[:80],
+    return {"title": str(answer["title"]).strip()[:80],
             "hook": str(answer.get("hook") or ""),
             "description": str(answer.get("description") or ""),
             "caption_quote": str(answer.get("caption_quote") or ""),
