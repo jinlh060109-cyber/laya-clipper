@@ -48,6 +48,7 @@
   button:disabled { opacity: .45; cursor: not-allowed; }
   #ai-models-refresh { padding: 0 8px; margin-left: 6px; font-size: 12px; line-height: 18px; }
   #ai-model { margin-top: 6px; }
+  #ai-model[hidden] { display: none; }
   ol { list-style: none; margin: 0; padding: 0; }
   #stages li { display: flex; justify-content: space-between; padding: 8px 0;
                border-bottom: 1px solid var(--line); }
@@ -109,7 +110,7 @@
       <div>
         <label for="ai-model-pick">Model <button id="ai-models-refresh" class="quiet" type="button" title="Ask the provider again">↻</button></label>
         <select id="ai-model-pick"></select>
-        <input id="ai-model" type="text" list="ai-models" autocomplete="off" placeholder="or type a model name">
+        <input id="ai-model" type="text" list="ai-models" autocomplete="off" placeholder="Type the model name" hidden>
         <datalist id="ai-models"></datalist>
         <div id="ai-models-state" class="hint"></div>
       </div>
@@ -323,7 +324,7 @@ function showProvider(model) {
   $("ai-key-row").hidden = !p || p.key_env === null;
   $("ai-url-row").hidden = !p || !p.needs_base_url;
   $("ai-result").textContent = "";
-  if (!p) { $("ai-model").value = ""; $("ai-model-pick").textContent = ""; $("ai-model-pick").disabled = true;
+  if (!p) { $("ai-model").value = ""; $("ai-model").hidden = true; $("ai-model-pick").textContent = ""; $("ai-model-pick").disabled = true;
     $("ai-models-state").textContent = ""; $("ai-key-state").textContent = "Clips are cut at sentence ends; no AI fill-in."; return; }
   for (const m of p.models) option(list, m, m);
   $("ai-model").value = model || p.model || p.default_model || "";
@@ -392,6 +393,8 @@ function fillModelPick(models, current) {
   for (const m of models) option(pick, m.id, m.name && m.name !== m.id ? m.name + "  (" + m.id + ")" : m.id);
   option(pick, "", "Other: type the name below");
   pick.value = models.some((m) => m.id === current) ? current : "";
+  // The text box is only for a name the list does not have ("Other").
+  $("ai-model").hidden = pick.value !== "";
   const list = $("ai-models");
   list.textContent = "";
   for (const m of models) option(list, m.id, m.name || m.id);
@@ -727,13 +730,11 @@ $("preview-btn").addEventListener("click", showPreview);
 $("ai-provider").addEventListener("change", () => showProvider());
 for (const id of ["ai-model", "ai-key", "ai-url"]) $(id).addEventListener("input", showAIPending);
 $("ai-model-pick").addEventListener("change", () => {
-  if ($("ai-model-pick").value) $("ai-model").value = $("ai-model-pick").value;
-  else $("ai-model").focus();
+  const chosen = $("ai-model-pick").value;
+  $("ai-model").hidden = chosen !== "";
+  if (chosen) $("ai-model").value = chosen;
+  else { $("ai-model").value = ""; $("ai-model").focus(); }
   showAIPending();
-});
-$("ai-model").addEventListener("input", () => {
-  const pick = $("ai-model-pick"), typed = $("ai-model").value.trim();
-  pick.value = [...pick.options].some((o) => o.value === typed) ? typed : "";
 });
 // A key or address typed in the form may unlock a different list.
 $("ai-key").addEventListener("change", () => loadModels(false));
