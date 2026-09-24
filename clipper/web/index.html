@@ -550,29 +550,39 @@ async function saveStyle() {
   } catch (error) { $("saved").textContent = error.message; }
 }
 
-let previewUrl = null;
+let previewUrl = null, previewSeq = 0, previewTimer = null;
 async function showPreview() {
   if (!current || !$("preview-clip").value) return;
   const s = styleNow();
   const q = new URLSearchParams({ run: current, clip: $("preview-clip").value, layout: s.layout,
     captions: s.captions, caption_style: s.caption_style, caption_case: s.caption_case,
     vertical: s.vertical ? "1" : "0" });
-  $("preview-btn").disabled = true;
+  // Only the newest request may paint: quick changes must not leave an
+  // older look on screen when its answer arrives last.
+  const seq = ++previewSeq;
   $("preview-state").className = "hint"; $("preview-state").textContent = "Rendering one frame…";
   try {
     const response = await fetch("/api/preview?" + q);
     if (!response.ok) throw new Error((await response.json()).error || response.statusText);
+    const blob = await response.blob();
+    if (seq !== previewSeq) return;
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = URL.createObjectURL(await response.blob());
-    $("caption-preview").src = previewUrl; $("caption-preview").hidden = false;
+    previewUrl = URL.createObjectURL(blob);
+    const img = $("caption-preview");
+    img.dataset.look = s.caption_style + "|" + s.caption_case + "|" + s.layout + "|" + s.captions + "|" + s.vertical;
+    img.src = previewUrl; img.hidden = false;
     $("preview-state").textContent = "Preview of " + $("preview-clip").value + ".";
   } catch (error) {
+    if (seq !== previewSeq) return;
     $("preview-state").className = "warn"; $("preview-state").textContent = error.message;
-  } finally { $("preview-btn").disabled = false; }
+  }
 }
 // Refresh an open preview when the look changes.
 for (const id of ["caption_style", "caption_case", "layout", "captions", "vertical", "preview-clip"])
-  $(id).addEventListener("change", () => { if (!$("caption-preview").hidden) showPreview(); });
+  $(id).addEventListener("change", () => {
+    if ($("caption-preview").hidden) return;
+    clearTimeout(previewTimer); previewTimer = setTimeout(showPreview, 150);
+  });
 
 function poll() {
   clearInterval(polling);
