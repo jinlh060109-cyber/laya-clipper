@@ -142,6 +142,7 @@ PlayResY: {play_y}
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {caption_style}
+{title_style}
 Style: Speaker,Arial,{speaker_size},&H00D0D0D0,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,1,40,40,{speaker_margin},1
 
 [Events]
@@ -254,13 +255,30 @@ def _karaoke(cue: Cue, uppercase: bool = False) -> str:
     return line
 
 
+HOOK_SECONDS = 2.8
+
+
+def _wrap_title(text: str, max_chars: int) -> str:
+    """Break a title into at most two balanced lines (ASS \\N)."""
+    words = text.split()
+    if display_width(text) <= max_chars or len(words) < 2:
+        return text
+    best = min(range(1, len(words)),
+               key=lambda i: abs(display_width(" ".join(words[:i]))
+                                 - display_width(" ".join(words[i:]))))
+    return " ".join(words[:best]) + "\\N" + " ".join(words[best:])
+
+
 def render_ass(cues: list[Cue], height: int,
                speakers: dict[str, str] | None = None,
                uppercase: bool = False, layout: str = "crop",
-               preset: str = "classic") -> str:
+               preset: str = "classic", hook: str = "",
+               hook_seconds: float = HOOK_SECONDS) -> str:
     """`layout="fit"` on a vertical render puts the captions just under the
     picture, which then sits in the middle of the frame. `preset` is one of
-    CAPTION_STYLES."""
+    CAPTION_STYLES. A `hook` is shown as a boxed title near the top for the
+    first `hook_seconds`, fading out, so the first second already tells the
+    viewer why to stay."""
     look = _preset(preset)
     uppercase = uppercase or look["upper"]
     size = int(font_size_for_height(height) * look["scale"])
@@ -270,7 +288,13 @@ def render_ass(cues: list[Cue], height: int,
         f"Style: Caption,{look['font']},{size},{look['primary']},{look['secondary']},"
         f"{look['outline_colour']},{look['back']},{-1 if look['bold'] else 0},0,0,0,"
         f"100,100,0,0,{look['border']},{look['outline']},{look['shadow']},2,60,60,{margin},1")
+    title_size = int(font_size_for_height(height) * 1.5)
+    title_margin = int(height * (0.2 if under_picture else 0.1))
+    title_style = (
+        f"Style: Title,{look['font']},{title_size},&H00FFFFFF,&H00FFFFFF,&HC0000000,"
+        f"&HC0000000,-1,0,0,0,100,100,0,0,3,16,0,8,80,80,{title_margin},1")
     header = ASS_HEADER.format(
+        title_style=title_style,
         play_x=int(height * 9 / 16) if height >= 1920 else int(height * 16 / 9),
         play_y=height,
         caption_style=caption_style,
@@ -278,6 +302,11 @@ def render_ass(cues: list[Cue], height: int,
         speaker_margin=int(height * 0.04),
     )
     lines: list[str] = []
+    if hook.strip():
+        text = _escape(hook.strip())
+        text = _wrap_title(text.upper() if uppercase else text, 22)
+        lines.append(f"Dialogue: 1,{format_ass_time(0)},{format_ass_time(hook_seconds)},"
+                     f"Title,,0,0,0,,{{\\fad(120,300)}}{text}")
     for cue in cues:
         start, end = format_ass_time(cue.start), format_ass_time(cue.end)
         text = _karaoke(cue, uppercase) if look["karaoke"] else _plain(cue, uppercase)

@@ -208,6 +208,9 @@
     <div>
       <label class="toggle" title="Only for clips with AI fill-in: the AI picks the moments"><input id="punch_ins" type="checkbox" checked> Zoom in at the AI's punch-in moments</label>
     </div>
+    <div>
+      <label class="toggle" title="Only for clips with AI fill-in"><input id="hook_title" type="checkbox" checked> Show the AI's hook as a title for the first seconds</label>
+    </div>
     <div class="full" id="caption-style-box">
       <label for="caption_style">Caption look</label>
       <div id="caption-preview-box">
@@ -360,10 +363,11 @@ function applyStyle(s) {
   for (const key of ["layout", "captions", "caption_style", "caption_case", "encoder", "notes"]) $(key).value = s[key];
   $("vertical").checked = s.vertical;
   $("punch_ins").checked = s.punch_ins;
+  $("hook_title").checked = s.hook_title;
 }
 const styleNow = () => ({ layout: $("layout").value, captions: $("captions").value,
   caption_style: $("caption_style").value, caption_case: $("caption_case").value, encoder: $("encoder").value,
-  vertical: $("vertical").checked, punch_ins: $("punch_ins").checked, notes: $("notes").value });
+  vertical: $("vertical").checked, punch_ins: $("punch_ins").checked, hook_title: $("hook_title").checked, notes: $("notes").value });
 
 function setFile(f) {
   if (!f) return;

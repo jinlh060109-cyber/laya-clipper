@@ -99,6 +99,18 @@ clip before you make anything (**Show preview** in the style panel):
 | `one_word` | one big word at a time, popping in |
 | `neon` | glowing cyan outline, words turn pink |
 
+**AI fill-in on screen.** When a clip has AI fill-in, its `hook` is shown as a
+boxed title at the top for the first 2.8 s, and each `punch_in` moment becomes
+a quick 1.15x zoom (captions never zoom). Both can be switched off in the
+style panel (`hook_title`, `punch_ins`). `captions.ass` in the clip folder
+holds the styled captions and title for any other editor.
+
+**Speed.** Qwen models on Model Studio and the Token Plan reason before
+answering by default; Clipper switches that off (a 99 s transcript went from
+over 7 minutes to 13 s with equally good clips). `AI_THINKING=on` restores it.
+If the model is rate-limited, overloaded or times out, the request is retried
+once on `AI_FALLBACK_MODEL` (default `qwen3.8-flash` on the Token Plan).
+
 **Layouts.** `fit` (default) keeps the whole picture, centred over a blurred
 copy of itself, so on-screen text and motion graphics are never cut off.
 `crop` fills the vertical frame and cuts the sides (best for one face in the
@@ -125,3 +137,9 @@ to `cut.mp4` and writes `edited.mp4`.
 
     pytest              # offline; no model download
     pytest -m model     # loads the real Laya checkpoint
+    pytest -m e2e tests/e2e   # the real app in Chromium: Whisper, Laya, ffmpeg
+
+The end-to-end suite needs `pip install playwright && playwright install
+chromium` and the GPU environment with the models. The AI test runs when
+`ALIBABA_TOKEN_PLAN_API_KEY` (or `CLIPPER_E2E_AI_PROVIDER` plus that
+provider's key) is set, and is skipped otherwise.

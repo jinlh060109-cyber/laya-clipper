@@ -164,6 +164,8 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(page, start_serve
     final = run / made["final"]
     duration = float(ffprobe(final)["format"]["duration"])
     assert abs(duration - spec["duration"]) < 0.5  # zooms never change the length
+    ass = (final.parent / "captions.ass").read_text(encoding="utf-8")
+    assert spec["hook"] and ",Title," in ass  # the AI's hook is on screen first
 
     # Switching to "no AI" keeps the saved key.
     page.evaluate("document.querySelector('#ai-panel').open = true")

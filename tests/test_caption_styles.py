@@ -92,3 +92,16 @@ def test_every_style_line_fits_inside_a_vertical_frame():
 
 def test_libass_may_wrap_a_line_that_still_runs_long():
     assert "WrapStyle: 0" in render_ass(build_cues(WORDS), 1920)
+
+
+def test_a_hook_is_a_top_title_for_the_first_seconds():
+    ass = render_ass(build_cues(WORDS), 1920, preset="bold", hook="This raccoon stole my hat at 3 AM")
+    title = next(line for line in ass.splitlines() if ",Title," in line and line.startswith("Dialogue"))
+    assert title.startswith("Dialogue: 1,0:00:00.00,0:00:02.80,Title")
+    assert "\\N" in title and "\\fad(" in title  # two lines, fades out
+    style = next(line for line in ass.splitlines() if line.startswith("Style: Title,"))
+    assert style.split(",")[18] == "8"  # top centre
+
+
+def test_no_hook_no_title():
+    assert "Dialogue: 1," not in render_ass(build_cues(WORDS), 1920)

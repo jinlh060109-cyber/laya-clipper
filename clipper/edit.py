@@ -6,6 +6,7 @@ Each clip gets its own folder under clips/:
   edit.json     the structured edit instruction (step 9)
   prompt.md     the same for an AI editor, with the style notes and words
   captions.srt  the clip's captions, when anyone speaks
+  captions.ass  the burned captions and hook title, styled, for other editors
 """
 from __future__ import annotations
 
@@ -190,15 +191,20 @@ def run_edit(run: Run, style: dict, fills: dict | None = None,
         zooms = ([p["at"] for p in spec["punch_ins"]]
                  if style.get("punch_ins", True) else None)
         fps = float(source_meta["video"].get("fps") or 30.0)
-        if style["captions"] == "burn" and cues:
-            ass = render_ass(cues, out_height, uppercase=style["caption_case"] == "upper",
-                             layout=style["layout"], preset=preset)
+        hook = spec["hook"] if style.get("hook_title", True) else ""
+        ass_file = folder / "captions.ass"
+        if style["captions"] == "burn" and (cues or hook):
+            ass = render_ass(cues if cues else [], out_height,
+                             uppercase=style["caption_case"] == "upper",
+                             layout=style["layout"], preset=preset, hook=hook)
+            ass_file.write_text(ass, encoding="utf-8")
             with staged_subtitles(ass, ".ass") as staged:
                 chain = build_filter_chain(width, height, vertical, Path(staged.name),
                                            layout=style["layout"], punch_ins=zooms, fps=fps)
                 _ffmpeg(final_command(ffmpeg, source, start, end, final, chain, encoder),
                         final, cwd=staged.parent)
         else:
+            ass_file.unlink(missing_ok=True)
             chain = build_filter_chain(width, height, vertical, None, layout=style["layout"],
                                        punch_ins=zooms, fps=fps)
             _ffmpeg(final_command(ffmpeg, source, start, end, final, chain, encoder), final)
