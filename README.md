@@ -86,7 +86,7 @@ of disk for the models. For the AI director you also need
 [Node.js](https://nodejs.org) 18+.
 
 ```bash
-git clone https://github.com/<you>/laya-clipper.git
+git clone https://github.com/jinlh060109-cyber/laya-clipper.git
 cd laya-clipper
 python -m venv .venv
 # Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
