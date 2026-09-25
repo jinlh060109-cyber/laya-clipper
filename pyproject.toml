@@ -16,6 +16,16 @@ dev = ["pytest", "playwright"]
 [project.scripts]
 clipper = "clipper.cli:main"
 
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["clipper*"]
+
+[tool.setuptools.package-data]
+clipper = ["skills/*.md", "web/*.html"]
+
 [tool.pytest.ini_options]
 markers = ["model: loads the real Laya checkpoint; deselected by default",
            "e2e: drives the real app in a browser with real models; deselected by default"]
