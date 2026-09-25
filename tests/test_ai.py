@@ -252,3 +252,42 @@ def test_when_the_fallback_fails_too_both_are_named(monkeypatch):
     config = ai.AIConfig("deepseek", "deepseek-chat", "k", "http://x/v1")
     with pytest.raises(ai.AIError, match="backup-model failed too"):
         ai.complete_json(config, "s", "u", SCHEMA, 100)
+
+
+def test_tool_results_with_frames_become_a_user_image_message_for_openai_style_models():
+    from clipper.ai import AIConfig, ToolChat
+    chat = ToolChat(AIConfig("openai", "gpt-x", "k", None), "sys", [])
+    chat.reply([("c1", [{"type": "text", "text": "Frames:"}, {"type": "image", "jpeg": "QUJD"}]),
+                ("c2", "plain")])
+    assert chat.messages[0] == {"role": "tool", "tool_call_id": "c1", "content": "Frames:"}
+    assert chat.messages[1]["content"] == "plain"
+    image = chat.messages[2]["content"][1]
+    assert chat.messages[2]["role"] == "user"
+    assert image["image_url"]["url"] == "data:image/jpeg;base64,QUJD"
+
+
+def test_tool_results_with_frames_stay_inside_the_tool_result_for_claude():
+    from clipper.ai import AIConfig, ToolChat
+    chat = ToolChat(AIConfig("anthropic", "claude-x", "k", None), "sys", [])
+    chat.reply([("c1", [{"type": "text", "text": "Frames:"}, {"type": "image", "jpeg": "QUJD"}])])
+    block = chat.messages[0]["content"][0]
+    assert block["type"] == "tool_result" and block["content"][1]["source"]["data"] == "QUJD"
+
+
+def test_a_model_that_refuses_images_carries_on_without_them(monkeypatch):
+    from clipper import ai
+    chat = ai.ToolChat(ai.AIConfig("openai", "gpt-x", "k", None), "sys", [])
+    chat.reply([("c1", [{"type": "text", "text": "Frames:"}, {"type": "image", "jpeg": "QUJD"}])])
+    seen = []
+
+    def step(max_tokens):
+        seen.append([m for m in chat.messages])
+        if len(seen) == 1:
+            raise ai.AIError("The openai request failed (400): model does not support image input")
+        return "ok", []
+    monkeypatch.setattr(chat, "_openai_step", step)
+    assert chat.step() == ("ok", [])
+    assert chat.vision is False
+    assert "image_url" not in str(chat.messages)
+    chat.reply([("c2", [{"type": "image", "jpeg": "QUJD"}])])
+    assert "cannot see images" in chat.messages[-1]["content"]

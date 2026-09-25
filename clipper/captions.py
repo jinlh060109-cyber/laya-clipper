@@ -285,6 +285,31 @@ def _placement(layout: str, height: int) -> tuple[int, int, int]:
     return 2, int(height * 0.08), int(height * 0.1)
 
 
+def reserved_bands(layout: str, height: int, preset: str = "classic") -> dict:
+    """Where the burned captions and the hook title sit, in pixels from the
+    top, so graphics laid over the clip can keep out of them."""
+    look = _preset(preset)
+    size = int(font_size_for_height(height) * look["scale"])
+    align, margin, title_margin = _placement(layout, height)
+    if align == 5:  # middle-centre
+        top, bottom = height / 2 - 1.3 * size, height / 2 + 1.3 * size
+    else:
+        bottom = height - margin
+        top = bottom - 2.6 * size  # two lines
+    title_size = int(font_size_for_height(height) * 1.5)
+    return {"caption_top": int(top), "caption_bottom": int(bottom),
+            "title_bottom": int(title_margin + 2 * title_size * 1.3 + 32)}
+
+
+def picture_band(layout: str, height: int) -> tuple[int, int]:
+    """Top and bottom of the actual picture on a vertical render; around it
+    is a blurred copy or black (fit, black, square) that graphics can use."""
+    if height < 1920 or layout in ("crop", "split"):
+        return 0, height
+    shown = 1080 * 9 // 16 if layout in ("fit", "black") else 1080
+    return (height - shown) // 2, (height + shown) // 2
+
+
 def render_ass(cues: list[Cue], height: int,
                speakers: dict[str, str] | None = None,
                uppercase: bool = False, layout: str = "crop",

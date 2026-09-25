@@ -2,7 +2,7 @@ import pytest
 
 from clipper.agent import (AgentError, checkpoint_for_language, load_agent,
                            uncalibrated_buckets, used_buckets)
-from clipper.questions import BUILTIN
+from clipper.questions import FIXED as BUILTIN
 
 QUESTIONS = {**BUILTIN, "kind": {"type": "choice", "instructions": "What kind?",
              "criteria": {k: k for k in ("tip", "joke", "story", "rant", "reveal", "other")}}}
@@ -84,7 +84,8 @@ def test_used_buckets_reflects_the_actual_questions():
     buckets = used_buckets(QUESTIONS)
     assert "score:3-5" in buckets       # 5-level scores
     assert "choice:6-10" in buckets     # kind (6)
-    assert "noul:2" in buckets
+    assert "choice:2" in buckets        # yes/no questions are asked as A/B choices
+    assert "noul:2" not in buckets
     assert "choice:11+" not in buckets  # nothing has 11+ options
 
 

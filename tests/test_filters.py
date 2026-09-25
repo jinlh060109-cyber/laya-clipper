@@ -38,7 +38,7 @@ def test_subtitles_expression_escapes_windows_drive_colon():
 def test_subtitles_expression_rejects_a_path_with_spaces():
     """ffmpeg truncates such paths at the first space. Stage to a temp dir."""
     with pytest.raises(ValueError, match="space"):
-        subtitles_expression(Path("C:/Users/Linhao Jin/c.ass"))
+        subtitles_expression(Path("C:/Users/Jane Doe/c.ass"))
 
 
 def test_fit_layout_burns_captions_after_the_overlay():

@@ -39,6 +39,11 @@ def select(scored: list[dict], action: list[dict], top_n: int = 5,
             "title_hint": cand.get("hook_line") or _first_sentence(cand.get("text", "")),
             "reason": cand.get("reason", ""), "source": "chunks" if chunk else "ai",
             "include": rank < top_n and cand["score"] >= min_score, "fill_in": False,
+            # Every question Laya answered, with its full distribution: the
+            # page shows how the score was reached.
+            "answers": cand.get("answers") or {},
+            "flags": cand.get("flags") or [],
+            "boundary": cand.get("boundary"),
         })
 
     moments = [a for a in action if a["end"] - a["start"] >= MIN_CLIP]

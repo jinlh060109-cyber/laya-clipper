@@ -17,7 +17,7 @@ def sheet_times(start: float, end: float, n: int = COLS * ROWS) -> list[float]:
 
 
 def _ffmpeg(args: list[str], cwd: Path, what: str) -> None:
-    result = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
+    result = subprocess.run(args, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", check=False)
     if result.returncode != 0:
         raise RuntimeError(f"Could not {what}:\n{ffmpeg_tail(result.stderr)}")

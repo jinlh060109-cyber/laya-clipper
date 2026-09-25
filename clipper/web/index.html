@@ -68,6 +68,7 @@
   .meter span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 9px;
          border: 1px solid var(--line); color: var(--muted); margin-left: 4px; }
+  .tag.warn { border-color: #c77700; color: #c77700; }
   video { width: 100%; max-height: 360px; background: #000; border-radius: 8px; }
   #results { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
   .result video { max-height: 420px; }
@@ -80,6 +81,15 @@
   details.panel > summary { cursor: pointer; font-weight: 600; }
   details.panel[open] > summary { margin-bottom: 14px; }
   #caption-preview-box { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  tr.laya-detail > td { background: var(--panel-2, rgba(127,127,127,.06)); padding: 8px 12px 14px; }
+  .laya-q { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .laya-q th, .laya-q td { text-align: left; vertical-align: top; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  .laya-q .range { color: var(--muted); max-width: 340px; }
+  .laya-q .range div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .laya-q .pick { font-weight: 600; color: var(--text); }
+  .laya-q .p { display: inline-block; min-width: 38px; text-align: right; margin-right: 6px; font-variant-numeric: tabular-nums; }
+  .laya-q .pbar { display: inline-block; height: 6px; background: var(--accent); border-radius: 3px; vertical-align: middle; margin-right: 6px; }
+  .laya-q .unsure { color: #c77700; }
   #caption-preview.stale { opacity: .5; transition: opacity .1s; }
   #caption-preview { max-width: 270px; max-height: 480px; border-radius: 8px; background: #000;
                      border: 1px solid var(--line); }
@@ -171,6 +181,9 @@
   <section id="preview" class="panel" hidden>
     <h2>Pick your clips</h2>
     <p id="preview-summary" class="hint"></p>
+    <label class="toggle" title="Every question Laya answered for each clip: its range, the value Laya gave, how sure it was and what it added to the score">
+      <input id="laya-details" type="checkbox"> Show how Laya decided</label>
+    <p id="laya-model" class="hint" hidden></p>
     <video id="player" controls preload="metadata" hidden></video>
     <div class="table-wrap">
       <table>
@@ -221,6 +234,10 @@
     <div>
       <label class="toggle" title="Only for clips with AI fill-in"><input id="hook_title" type="checkbox" checked> Show the AI's hook as a title for the first seconds</label>
     </div>
+    <div class="full">
+      <label class="toggle" title="After the edit, the chosen AI reads each clip's script, looks at its frames and adds animated graphics (Remotion): counters, kinetic text, lower thirds, pointers. It previews them before rendering. The plain edit is kept as final_plain.mp4."><input id="director" type="checkbox"> AI director: add motion graphics (Remotion)</label>
+      <div class="hint" id="director-hint"></div>
+    </div>
     <div class="full" id="caption-style-box">
       <label for="caption_style">Caption look</label>
       <div id="caption-preview-box">
@@ -258,6 +275,7 @@ const LABELS = {
   "segment": "AI proposes clips and questions", "rate": "Laya scores the clips",
   "action": "Find action without speech", "select": "Pick clips for the preview",
   "style": "Apply your style", "fillin": "AI fill-in", "edit": "Cut and edit the clips",
+  "director": "AI director adds graphics",
 };
 const $ = (id) => document.getElementById(id);
 let file = null, config = null, current = null, polling = null, aiReady = false;
@@ -286,6 +304,13 @@ async function loadConfig() {
   for (const c of config.caption_styles) option($("caption_style"), c.id, c.label);
   showAI(config.ai, true);
   applyStyle(config.style);
+  if (config.remotion) {
+    $("director").checked = false; $("director").disabled = true;
+    $("director-hint").textContent = config.remotion;
+  } else {
+    $("director-hint").textContent = "Uses the AI chosen above; a vision model can see the frames. "
+      + "Adds about 1-2 minutes per clip.";
+  }
 }
 
 function providerLabel(id) {
@@ -469,10 +494,12 @@ function applyStyle(s) {
   $("vertical").checked = s.vertical;
   $("punch_ins").checked = s.punch_ins;
   $("hook_title").checked = s.hook_title;
+  $("director").checked = !!s.director;
 }
 const styleNow = () => ({ layout: $("layout").value, captions: $("captions").value,
   caption_style: $("caption_style").value, caption_case: $("caption_case").value, encoder: $("encoder").value,
-  vertical: $("vertical").checked, punch_ins: $("punch_ins").checked, hook_title: $("hook_title").checked, notes: $("notes").value });
+  vertical: $("vertical").checked, punch_ins: $("punch_ins").checked, hook_title: $("hook_title").checked,
+  director: $("director").checked && !$("director").disabled, notes: $("notes").value });
 
 function setFile(f) {
   if (!f) return;
@@ -568,6 +595,78 @@ function render(status) {
   if (!running && status.state === "done") loadPreview(status.run, status.kind === "make");
 }
 
+// How Laya reached a clip's score: per question, the range it could answer
+// in, the answer with its whole distribution, the confidence, and the part
+// the answer played in the score (weight x normalized answer).
+const QTYPE = { score: "Score (levels 0–k)", choice: "Choice (one option)", noul: "Yes / no" };
+function rangeOf(q) {
+  if (q.type === "score") return (q.criteria || []).map((c, i) => ["" + i, c]);
+  if (q.type === "choice") return Object.entries(q.criteria || {});
+  return [["false", (q.criteria || {}).false || "no"], ["true", (q.criteria || {}).true || "yes"]];
+}
+function describeValue(a, q) {
+  if (a.type === "score") {
+    const top = (q.criteria || []).length - 1;
+    return a.value.toFixed(2) + " of " + top;
+  }
+  if (a.type === "noul") return (a.value >= 0.5 ? "yes" : "no") + " (p(yes) " + a.value.toFixed(2) + ")";
+  return String(a.value);
+}
+function decisionRow(clip, questions) {
+  const tr = document.createElement("tr");
+  tr.className = "laya-detail"; tr.dataset.for = clip.id; tr.hidden = !$("laya-details").checked;
+  const td = document.createElement("td"); td.colSpan = 6;
+  const table = document.createElement("table"); table.className = "laya-q";
+  table.innerHTML = "<thead><tr><th>Question</th><th>Type</th><th>Range and Laya's probabilities</th>" +
+    "<th>Laya's value</th><th>Confidence</th><th>Weight</th><th>Adds to score</th></tr></thead>";
+  const body = document.createElement("tbody");
+  for (const q of questions) {
+    const a = clip.answers[q.id];
+    if (!a) continue;
+    const row = document.createElement("tr");
+    const cell = (text, cls) => { const c = document.createElement("td"); if (cls) c.className = cls;
+      if (text instanceof Node) c.appendChild(text); else c.textContent = text; row.appendChild(c); return c; };
+    const name = document.createElement("div");
+    name.innerHTML = "<b></b> <span class=hint></span><div class=hint></div>";
+    name.querySelector("b").textContent = q.id.replace(/_/g, " ");
+    name.querySelector("span").textContent = (q.layer === "fixed" ? "fixed layer" : "variable layer, written by the AI") +
+      (q.reads === "edges" ? " · reads the opening and closing sentence" : "");
+    name.querySelector("div").textContent = typeof q.instructions === "string" ? q.instructions : JSON.stringify(q.instructions);
+    cell(name);
+    cell(QTYPE[q.type] || q.type);
+    const range = document.createElement("div");
+    const probs = a.probabilities || {};
+    const best = Object.entries(probs).sort((x, y) => y[1] - x[1])[0];
+    for (const [key, text] of rangeOf(q)) {
+      const line = document.createElement("div");
+      const p = probs[key] ?? 0;
+      if (best && key === best[0]) line.className = "pick";
+      line.title = key + ": " + (typeof text === "string" ? text : JSON.stringify(text));
+      line.innerHTML = "<span class=p></span><span class=pbar></span><span class=t></span>";
+      line.querySelector(".p").textContent = Math.round(p * 100) + "%";
+      line.querySelector(".pbar").style.width = Math.max(2, Math.round(p * 60)) + "px";
+      line.querySelector(".t").textContent = key + ": " + (typeof text === "string" ? text : JSON.stringify(text));
+      range.appendChild(line);
+    }
+    cell(range, "range");
+    cell(describeValue(a, q) + (a.normalized != null ? " → " + a.normalized.toFixed(2) : ""));
+    cell((a.confidence ?? 0).toFixed(2) + (a.uncertain ? " (unsure)" : ""), a.uncertain ? "unsure" : "");
+    cell(a.weight ? Math.round(a.weight * 100) + "%" : "–");
+    cell(a.weight && a.normalized != null ? "+" + (a.weight * a.normalized).toFixed(3) : "not scored");
+    body.appendChild(row);
+  }
+  const total = document.createElement("tr");
+  total.innerHTML = "<td colspan=6 class=hint>Score = sum of weight × normalized answer (score: value ÷ top level; yes/no: p(yes)); choice answers describe the clip and carry no weight.</td><td><b></b></td>";
+  total.querySelector("b").textContent = clip.score.toFixed(3);
+  body.appendChild(total);
+  table.appendChild(body); td.appendChild(table); tr.appendChild(td);
+  return tr;
+}
+$("laya-details").addEventListener("change", () => {
+  for (const tr of document.querySelectorAll("#rows tr.laya-detail")) tr.hidden = !$("laya-details").checked;
+  $("laya-model").hidden = !$("laya-details").checked || !$("laya-model").textContent;
+});
+
 async function loadPreview(run, showMade) {
   const data = await json("/api/selection?run=" + encodeURIComponent(run));
   const ai = data.ai ? "Clips proposed by " + data.ai.provider + " (" + data.ai.model + ")"
@@ -576,6 +675,10 @@ async function loadPreview(run, showMade) {
   const asked = data.questions.map((q) => q.id.replace(/_/g, " ")).join(", ");
   $("preview-summary").textContent = ai + ". Video type: " + (data.content_type || "unknown") +
     ". Laya answered: " + asked + ".";
+  const m = data.laya_model;
+  $("laya-model").textContent = m ? "Laya " + m.package + " · checkpoint " + m.checkpoint + " (" + m.repo +
+    ") on " + m.device + (m.confidence_calibrated ? "" : " · confidence uncalibrated for " + m.uncalibrated_buckets.join(", ")) : "";
+  $("laya-model").hidden = !$("laya-details").checked || !m;
   const player = $("player");
   const rows = $("rows");
   rows.textContent = "";
@@ -604,6 +707,15 @@ async function loadPreview(run, showMade) {
     meta.textContent = clip.category + (clip.reason ? " · " + clip.reason : "");
     if (clip.uncertain) { const tag = document.createElement("span"); tag.className = "tag";
       tag.textContent = "Laya unsure"; meta.appendChild(tag); }
+    for (const flag of clip.flags || []) { const tag = document.createElement("span");
+      tag.className = "tag warn"; tag.textContent = flag;
+      tag.title = flag === "no start" ? "Laya: the first sentence continues something said before the clip"
+                                      : "Laya: the last sentence is not a conclusion";
+      meta.appendChild(tag); }
+    if (clip.boundary && clip.boundary.moved) { const tag = document.createElement("span");
+      tag.className = "tag"; tag.textContent = "range fixed by AI";
+      tag.title = "Was " + clock(clip.boundary.was[0]) + "–" + clock(clip.boundary.was[1]) + ". " + clip.boundary.why;
+      meta.appendChild(tag); }
     const score = document.createElement("div");
     score.className = "num"; score.textContent = clip.score.toFixed(2);
     const meter = document.createElement("div"); meter.className = "meter";
@@ -619,6 +731,7 @@ async function loadPreview(run, showMade) {
       tr.appendChild(td);
     }
     rows.appendChild(tr);
+    if (clip.answers && Object.keys(clip.answers).length) rows.appendChild(decisionRow(clip, data.questions));
   }
   const pick = $("preview-clip"), was = pick.value;
   pick.textContent = "";
@@ -638,15 +751,27 @@ function showResults(run, made) {
     card.className = "result";
     const base = "/media/" + encodeURIComponent(run) + "/clips/" + encodeURIComponent(clip.folder) + "/";
     const video = document.createElement("video");
-    video.controls = true; video.preload = "metadata"; video.src = base + "final.mp4#t=0.1";
+    video.controls = true; video.preload = "metadata";
+    video.src = base + "final.mp4" + "#t=0.1";
     const title = document.createElement("p");
     title.textContent = clip.title + " (" + clip.duration + " s)";
     const links = document.createElement("p");
-    for (const [name, label] of [["prompt.md", "Edit prompt"], ["edit.json", "edit.json"], ["cut.mp4", "Raw cut"]]) {
+    const files = [["prompt.md", "Edit prompt"], ["edit.json", "edit.json"], ["cut.mp4", "Raw cut"]];
+    const director = clip.director || {};
+    if (director.rendered) files.push(["final_plain.mp4", "Without graphics"]);
+    if (director.summary !== undefined || director.error) files.push(["director.json", "Director log"]);
+    for (const [name, label] of files) {
       const a = document.createElement("a"); a.href = base + name; a.target = "_blank";
       a.textContent = label; links.appendChild(a);
     }
-    card.append(video, title, links);
+    card.append(video, title);
+    if (director.error || director.summary) {
+      const note = document.createElement("p"); note.className = "hint";
+      note.textContent = director.error ? "AI director failed, plain edit kept: " + director.error
+                                        : "AI director: " + director.summary;
+      card.appendChild(note);
+    }
+    card.appendChild(links);
     box.appendChild(card);
   }
   $("done").hidden = made.length === 0;
@@ -655,7 +780,7 @@ function showResults(run, made) {
 async function make() {
   $("make").disabled = true;
   $("done").hidden = true;
-  const choices = [...$("rows").children].map((tr) => ({ id: tr.dataset.id,
+  const choices = [...$("rows").children].filter((tr) => tr.dataset.id).map((tr) => ({ id: tr.dataset.id,
     include: tr.querySelector(".include").checked, fill_in: tr.querySelector(".fill").checked }));
   try {
     await applyAIForm();
@@ -722,7 +847,14 @@ for (const id of ["caption_style", "caption_case", "layout", "captions", "vertic
 function poll() {
   clearInterval(polling);
   polling = setInterval(async () => {
-    const status = await json("/api/status");
+    let status;
+    try {
+      status = await json("/api/status");
+    } catch (error) {
+      // The app stopped or the network blinked: say so and keep trying.
+      $("progress-title").textContent = "Lost contact with the app (" + error.message + "). Retrying…";
+      return;
+    }
     render(status);
     if (status.state !== "running") clearInterval(polling);
   }, 1000);

@@ -32,7 +32,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_VIDEO = ROOT / "runs" / "2026-09-23-camping-story" / "video.mp4"
 ARTIFACTS = ROOT / "e2e-artifacts"
-CLIP_FILES = ("final.mp4", "edit.json", "captions.srt", "captions.ass", "prompt.md")
+CLIP_FILES = ("final.mp4", "final_plain.mp4", "director.json", "edit.json", "captions.srt",
+              "captions.ass", "prompt.md")
 
 
 def ffprobe(path: Path) -> dict:

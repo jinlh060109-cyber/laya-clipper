@@ -88,10 +88,14 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--top", type=int, default=5, help="How many clips to tick.")
     _ai_arguments(p)
 
-    p = sub.add_parser("make", help="Steps 7-10: style, optional AI fill-in, edit.")
+    p = sub.add_parser("make", help="Steps 7-11: style, optional AI fill-in, edit, "
+                                    "optional AI director (Remotion graphics).")
     p.add_argument("run")
     p.add_argument("--only", help="Comma-separated clip ids to make, e.g. c1,c3,a0.")
     p.add_argument("--fill-in", action="store_true", help="Let the AI fill in each clip.")
+    p.add_argument("--director", action="store_true",
+                   help="Let the AI director add Remotion motion graphics to each clip "
+                        "(needs Node.js and `npm install` in remotion/).")
     for key in STYLE_FLAGS:
         p.add_argument(f"--{key.replace('_', '-')}", dest=key, choices=CHOICES[key])
     _ai_arguments(p)
@@ -180,11 +184,21 @@ def _make(args) -> int:
                 raise ValueError(f"Unknown clip id(s): {', '.join(unknown)}.")
         apply_choices(run, choices)
     overrides = {key: getattr(args, key) for key in STYLE_FLAGS if getattr(args, key)}
+    if args.director:
+        overrides["director"] = True
     steps = default_steps()
     chosen = steps.style(run, {"style": overrides})
     fills = steps.fillin(run, chosen, _printer("AI filling in clips"))
-    for clip in steps.edit(run, chosen, fills, _printer("Editing clips")):
+    done = steps.edit(run, chosen, fills, _printer("Editing clips"))
+    if chosen.get("director"):
+        done = steps.director(run, chosen, done, _printer("AI director adding graphics"))
+    for clip in done:
         print(f"{run.root / clip['final']}  {clip['duration']}s  {clip['title']}")
+        director = clip.get("director") or {}
+        if director.get("error"):
+            print(f"    AI director failed, plain edit kept: {director['error']}")
+        elif director:
+            print(f"    AI director: {director['summary']}")
     print("Each clip folder also has prompt.md and edit.json for an AI editor.")
     return 0
 

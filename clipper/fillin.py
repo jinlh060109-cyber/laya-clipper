@@ -22,16 +22,30 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
-SYSTEM = """You prepare one short video clip for posting. You get only this
-clip's transcript, with times in seconds from the clip's start, and the
-creator's style notes. Return:
-- title: under 60 characters, specific, not clickbait.
-- hook: the one line to put on screen in the first second.
-- description: two sentences for the post.
-- caption_quote: the single most quotable sentence, word for word from the transcript.
-- punch_ins: 0-3 moments (seconds from the clip's start) where a quick zoom
-  would land the point, each with a short reason.
-Follow the style notes for tone and wording."""
+SYSTEM = """You prepare one short vertical video clip for posting on
+TikTok, Reels or Shorts. You get only this clip: its kind, length, the
+creator's style notes and its transcript, with times in seconds from the
+clip's start. Write in the language the clip is spoken in. The creator's
+style notes win over everything below.
+
+Return one JSON object:
+- title: the post title. Under 60 characters, specific to what is said
+  ("Why salting pasta water doesn't make it boil faster"), not a teaser
+  ("You won't believe this"). No hashtags, no emoji unless the notes ask.
+- hook: the words shown big on screen for the first 2.8 seconds, over the
+  opening. 3-8 words that make a stranger want the rest: the question the
+  clip answers, the surprising claim, or the stakes. It must not repeat the
+  first spoken line word for word, and must not give away the payoff.
+- description: two sentences for the post caption: what the viewer gets,
+  then why it matters. Plain words.
+- caption_quote: the single most quotable sentence, copied exactly from the
+  transcript.
+- punch_ins: 0-3 moments where a quick zoom lands the point: the punchline,
+  the key number, the reveal. Give the time (seconds from the clip's start,
+  taken from the transcript, just as the key word starts) and a short
+  reason. Keep them at least 3 seconds apart and not in the first 3
+  seconds, where the hook title is on screen. None is better than a zoom
+  on an ordinary line."""
 
 
 def clip_slice(transcript: dict, start: float, end: float) -> str:

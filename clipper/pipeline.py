@@ -3,8 +3,9 @@
 Analyze (steps 1-6): read the video, transcribe it, let the AI propose clips
 and Laya questions, let Laya rate them, find moments without speech, and
 pick what to show in the preview.
-Make clips (steps 7-10): fix the style, optionally let the AI fill in each
-clip, then cut and edit every ticked clip.
+Make clips (steps 7-11): fix the style, optionally let the AI fill in each
+clip, cut and edit every ticked clip, then optionally let the AI director
+add Remotion motion graphics to each (clipper.director).
 
 Steps are injectable so the job runner is tested without any model or ffmpeg.
 """
@@ -18,7 +19,7 @@ from typing import Any, Callable
 from clipper.run import Run
 
 ANALYZE = ("ingest", "transcribe", "segment", "rate", "action", "select")
-MAKE = ("style", "fillin", "edit")
+MAKE = ("style", "fillin", "edit", "director")
 Progress = Callable[[int, int], None]
 
 
@@ -33,6 +34,8 @@ class Steps:
     style: Callable[[Run, dict], dict]
     fillin: Callable[[Run, dict, Progress], dict]
     edit: Callable[[Run, dict, dict, Progress], list]
+    director: Callable[[Run, dict, list, Progress], list] = (
+        lambda run, style, done, progress: done)
 
 
 def default_steps() -> Steps:
@@ -111,5 +114,12 @@ def default_steps() -> Steps:
 
         return run_edit(run, chosen_style, fills=fills, progress=progress)
 
+    def director(run: Run, chosen_style: dict, done: list, progress: Progress) -> list:
+        from clipper import director as graphics
+        from clipper.ai import config_from_env
+
+        return graphics.run_director(run, chosen_style, done, config_from_env(), progress)
+
     return Steps(ingest=ingest, transcribe=transcribe, segment=segment, rate=rate,
-                 action=action, select=select, style=style, fillin=fillin, edit=edit)
+                 action=action, select=select, style=style, fillin=fillin, edit=edit,
+                 director=director)

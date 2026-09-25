@@ -15,7 +15,7 @@ from clipper.hardware import ENCODERS
 
 DEFAULT = {"layout": "fit", "vertical": True, "captions": "burn",
            "caption_style": "classic", "caption_case": "sentence", "encoder": "auto",
-           "punch_ins": True, "hook_title": True, "notes": ""}
+           "punch_ins": True, "hook_title": True, "director": False, "notes": ""}
 CHOICES = {"layout": LAYOUTS, "captions": ("burn", "sidecar", "none"),
            "caption_style": tuple(CAPTION_STYLES),
            "caption_case": ("sentence", "upper"),
@@ -52,6 +52,7 @@ def validate(data: dict) -> dict:
     out["vertical"] = bool(out["vertical"])
     out["punch_ins"] = bool(out["punch_ins"])
     out["hook_title"] = bool(out["hook_title"])
+    out["director"] = bool(out["director"])
     out["notes"] = str(out["notes"] or "")
     if len(out["notes"]) > MAX_NOTES:
         raise ValueError(f"Style notes are limited to {MAX_NOTES} characters.")

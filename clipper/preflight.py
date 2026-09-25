@@ -51,7 +51,7 @@ def find_binary(name: str, env_var: str) -> Path:
 def _run_filters(ffmpeg: Path) -> str:
     result = subprocess.run(
         [str(ffmpeg), "-hide_banner", "-filters"],
-        capture_output=True,
+        stdin=subprocess.DEVNULL, capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",

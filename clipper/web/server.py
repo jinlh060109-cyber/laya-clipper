@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from clipper import ai, envfile, style
 from clipper.captions import CAPTION_STYLES
+from clipper.questions import FIXED, reads
 from clipper.run import Run, default_run_name
 from clipper.selection import apply_choices
 from clipper.web.jobs import JobBusy, JobRunner
@@ -27,6 +28,13 @@ MEDIA_TYPES = {".mp4": "video/mp4", ".mov": "video/quicktime", ".mkv": "video/x-
                ".srt": "text/plain; charset=utf-8", ".jpg": "image/jpeg"}
 INDEX = Path(__file__).with_name("index.html")
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _remotion_missing() -> str | None:
+    """Why the AI director cannot run on this machine, or None."""
+    from clipper.director import available
+
+    return available()
 
 
 class NotFound(LookupError):
@@ -69,7 +77,8 @@ class App:
         return {"hardware": self.hardware(), "models": MODELS, "ai": self.ai_state(),
                 "caption_styles": [{"id": sid, "label": look["label"]}
                                    for sid, look in CAPTION_STYLES.items()],
-                "hf_token": bool(os.environ.get("HF_TOKEN")), "style": style.load()}
+                "hf_token": bool(os.environ.get("HF_TOKEN")), "style": style.load(),
+                "remotion": _remotion_missing()}
 
     @staticmethod
     def _form(body: dict) -> tuple[str, dict[str, str | None], ai.AIConfig | None]:
@@ -225,8 +234,14 @@ class App:
                 "content_type": segments.get("content_type"),
                 "summary": segments.get("summary", ""),
                 "ai": segments.get("ai"), "ai_error": segments.get("ai_error"),
-                "questions": [{"id": qid, "type": q["type"], "instructions": q["instructions"]}
+                "questions": [{"id": qid, "type": q["type"], "instructions": q["instructions"],
+                               "criteria": q.get("criteria"),
+                               "weight": (segments.get("weights") or {}).get(qid, 0.0),
+                               "layer": "fixed" if qid in FIXED else "variable",
+                               "reads": reads(q)}
                               for qid, q in (segments.get("questions") or {}).items()],
+                "laya_model": (run.read_json("scored.json").get("laya_model")
+                               if run.exists("scored.json") else None),
                 "made": run.read_json("clips.json")["clips"] if run.exists("clips.json") else []}
 
     def make(self, body: dict) -> dict:

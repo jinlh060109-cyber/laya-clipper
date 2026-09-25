@@ -2,7 +2,7 @@
 
 ## Testing
 
-- Use end-to-end tests as the only way to test. Use them to prove complex features work.
+- Use end-to-end(E2E) tests as the only way to test. Use them to prove complex features work.DO NOT PERFORM TEST FOR WHATSOEVER, ONLY WHEN IMPORTANT CHANGES ARE MADE.
 - Never write unit tests after writing the code.
 - Run the tests once the implementation is finished, not while you are still building it.
 - Do not settle for the simplest scenario that passes. Test a medium-to-hard, realistic scenario.

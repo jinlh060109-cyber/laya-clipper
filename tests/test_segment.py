@@ -106,7 +106,7 @@ def test_when_the_ai_fails_the_run_falls_back_to_chunks(tmp_path):
     out = segment.run_segment(run, CLAUDE, complete=complete)
     assert out["ai"] is None and "API key" in out["ai_error"]
     assert out["candidates"] and all(c["category"] == "chunk" for c in out["candidates"])
-    assert set(out["questions"]) == {"clipworthy", "hook_strength", "self_contained", "ends_cleanly"}
+    assert set(out["questions"]) == {"clipworthy", "hook_strength", "has_start", "has_end"}
 
 
 def test_when_the_ai_proposes_nothing_usable_the_run_falls_back(tmp_path):
@@ -140,3 +140,39 @@ def test_schema_is_strict_everywhere():
                 walk(value)
     walk(segment.SCHEMA)
     json.dumps(segment.SCHEMA)
+
+
+def test_the_boundary_check_runs_after_the_proposal_and_can_move_a_clip(tmp_path):
+    run = _run(tmp_path)
+    asked = []
+
+    def complete(config, system, user, schema, tokens):
+        asked.append(system)
+        if len(asked) == 1:
+            return AI_ANSWER
+        # The check: clip 0 moves to the sentences starting at the first one.
+        return {"clips": [{"id": 0, "has_start": False, "has_end": True, "start": 0, "end": 2,
+                           "why": "Starts mid-thought."}]}
+
+    out = segment.run_segment(run, CLAUDE, complete=complete)
+    assert len(asked) == 2 and "has_start" in asked[1]
+    clip = out["candidates"][0]
+    assert clip["boundary"]["moved"] and clip["start"] == 0.0
+    assert clip["category"] == "tip" and clip["text"].startswith(LONG["segments"][0]["text"].split()[0])
+    assert out["boundary_error"] is None
+
+
+def test_a_failing_boundary_check_keeps_the_proposed_clips(tmp_path):
+    run = _run(tmp_path)
+    calls = []
+
+    def complete(config, system, user, schema, tokens):
+        calls.append(1)
+        if len(calls) == 1:
+            return AI_ANSWER
+        raise AIError("rate limited")
+
+    out = segment.run_segment(run, CLAUDE, complete=complete)
+    proposed = segment.snap(AI_ANSWER["candidates"], _words(LONG), 130.0)[0]
+    assert out["candidates"][0]["start"] == proposed["start"]
+    assert out["boundary_error"] == "rate limited"

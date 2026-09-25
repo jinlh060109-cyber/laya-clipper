@@ -101,23 +101,32 @@ def _transformers_asr(audio, model: str, device: str, batch_size: int = 8) -> di
         f"openai/whisper-{model}", dtype=torch.float16).to(device).eval()
 
     def features(pieces):
-        return processor(pieces, sampling_rate=SAMPLE_RATE, return_tensors="pt") \
-            .input_features.to(device, torch.float16)
+        # The attention mask marks the padding of chunks under 30 s; without
+        # it transformers warns that it cannot tell padding from speech.
+        batch = processor(pieces, sampling_rate=SAMPLE_RATE, return_tensors="pt",
+                          return_attention_mask=True)
+        return (batch.input_features.to(device, torch.float16),
+                batch.attention_mask.to(device))
 
     texts: list[str] = []
     with torch.inference_mode():
         # Like whisperx: the language is read from the first 30 s of audio.
-        token = whisper.detect_language(features([audio[:30 * SAMPLE_RATE]]))[0]
+        token = whisper.detect_language(features([audio[:30 * SAMPLE_RATE]])[0])[0]
         language = processor.tokenizer.convert_ids_to_tokens(int(token)).strip("<|>")
         for i in range(0, len(chunks), batch_size):
             pieces = [audio[int(c["start"] * SAMPLE_RATE):int(c["end"] * SAMPLE_RATE)]
                       for c in chunks[i:i + batch_size]]
+            inputs, mask = features(pieces)
             # A static KV cache keeps tensor shapes fixed. With the default
             # growing cache an Intel GPU compiles new kernels at every decoding
             # step: minutes of warm-up. torch.compile would need a C compiler.
-            ids = whisper.generate(features(pieces), task="transcribe", language=language,
-                                   cache_implementation="static", disable_compile=True)
-            texts += processor.batch_decode(ids, skip_special_tokens=True)
+            ids = whisper.generate(inputs, attention_mask=mask, task="transcribe",
+                                   language=language, cache_implementation="static",
+                                   disable_compile=True)
+            # Whisper's tokenizer is BPE: transformers ignores the clean-up
+            # anyway, so say so instead of being warned about it every batch.
+            texts += processor.batch_decode(ids, skip_special_tokens=True,
+                                            clean_up_tokenization_spaces=False)
     del whisper, vad  # see _free_device_memory
     return {"segments": segments_from_chunks(chunks, texts), "language": language}
 
@@ -148,10 +157,30 @@ def transcribe(wav: Path, run: Run, model: str = "large-v3",
         _free_device_memory(device)
 
 
+def _import_whisperx():
+    """whisperx, with pyannote's audio module loaded without its torchcodec
+    warning. pyannote decodes files through torchcodec, which needs FFmpeg
+    4-7 as shared DLLs; this app never hands it a file. whisperx.load_audio
+    decodes with the ffmpeg program, and voice detection and diarization get
+    the waveform in memory, the route pyannote's own warning recommends. So
+    the warning (a long traceback on every run with FFmpeg 8+ or a static
+    build) says nothing about this app, and only this warning is silenced."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=r"\s*torchcodec is not installed correctly",
+                                category=UserWarning)
+        try:
+            import pyannote.audio.core.io  # noqa: F401 - the module that warns on import
+        except ImportError:
+            pass  # whisperx reports a missing pyannote itself, if it needs it
+        import whisperx
+    return whisperx
+
+
 def _transcribe(wav: Path, run: Run, model: str, device: str,
                 hf_token: str | None) -> dict:
-    import whisperx
-
+    whisperx = _import_whisperx()
     audio = whisperx.load_audio(str(wav))
     from clipper.hardware import is_rocm
 

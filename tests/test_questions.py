@@ -57,14 +57,14 @@ def test_weights_sum_to_one_and_split_builtins_and_ai():
     assert sum(weights.values()) == pytest.approx(1.0)
     assert "kind" not in weights and "ghost" not in weights
     assert weights["tip"] == pytest.approx(0.15) and weights["numbers"] == pytest.approx(0.05)
-    assert weights["clipworthy"] == pytest.approx(0.40)
+    assert weights["clipworthy"] == pytest.approx(0.30)
 
 
 def test_without_ai_questions_the_builtins_carry_all_the_weight():
     weights = q.combined_weights({}, {})
-    assert set(weights) == set(q.BUILTIN_WEIGHTS)
+    assert set(weights) == set(q.FIXED_WEIGHTS)
     assert sum(weights.values()) == pytest.approx(1.0)
-    assert weights["clipworthy"] == pytest.approx(0.40 / 0.80)
+    assert weights["clipworthy"] == pytest.approx(0.30 / 0.80)
 
 
 def test_ai_questions_without_weights_share_equally():

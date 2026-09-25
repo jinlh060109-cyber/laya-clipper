@@ -1,10 +1,22 @@
-runs/
+# Local data and secrets
 .env
-__pycache__/
-*.pyc
-.venv/
-.venv-gpu/
-*.egg-info/
-.playwright-mcp/
+runs/
 style.json
 e2e-artifacts/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.venv-gpu/
+.pytest_cache/
+.ruff_cache/
+
+# Tools
+.playwright-mcp/
+.superpowers/
+
+# Remotion
+remotion/node_modules/
+remotion/build/

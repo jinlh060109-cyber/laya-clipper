@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -36,13 +37,15 @@ PROVIDERS: dict[str, dict] = {
         "models": ["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-flash", "qwen3.6-flash",
                    "deepseek-v4-pro", "deepseek-v4.1-flash", "glm-5.3", "glm-5.2"],
         "key_hint": "Token Plan key, starts with sk-sp- (Singapore region)",
-        "no_thinking": {"enable_thinking": False}, "fallback_model": "qwen3.8-flash"},
+        "no_thinking": {"enable_thinking": False}, "fallback_model": "qwen3.8-flash",
+        "json_schema": True},
     "alibaba": {"label": "Alibaba Cloud Model Studio (pay-as-you-go)", "kind": "openai",
                 "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
                 "key_env": "DASHSCOPE_API_KEY", "default_model": "qwen-plus",
                 "models": ["qwen-plus", "qwen-max", "qwen-flash"],
                 "key_hint": "Model Studio key (not a Token Plan key)",
-                "no_thinking": {"enable_thinking": False}, "fallback_model": "qwen-flash"},
+                "no_thinking": {"enable_thinking": False}, "fallback_model": "qwen-flash",
+                "json_schema": True},
     "deepseek": {"label": "DeepSeek", "kind": "openai", "base_url": "https://api.deepseek.com/v1",
                  "key_env": "DEEPSEEK_API_KEY", "default_model": "deepseek-chat",
                  "models": ["deepseek-chat"], "key_hint": ""},
@@ -52,10 +55,12 @@ PROVIDERS: dict[str, dict] = {
                    "key_env": "OPENROUTER_API_KEY", "default_model": "", "models": [],
                    "key_hint": ""},
     "openai": {"label": "OpenAI", "kind": "openai", "base_url": "https://api.openai.com/v1",
-               "key_env": "OPENAI_API_KEY", "default_model": "", "models": [], "key_hint": ""},
+               "key_env": "OPENAI_API_KEY", "default_model": "", "models": [], "key_hint": "",
+               "json_schema": True},
     "ollama": {"label": "Ollama (local, free)", "kind": "openai",
                "base_url": "http://localhost:11434/v1", "key_env": None,
-               "default_model": "", "models": [], "key_hint": "No key needed"},
+               "default_model": "", "models": [], "key_hint": "No key needed",
+               "json_schema": True},
     "custom": {"label": "Custom OpenAI-compatible server", "kind": "openai", "base_url": None,
                "key_env": "AI_API_KEY", "default_model": "", "models": [],
                "key_hint": "Only if the server needs one"},
@@ -68,6 +73,11 @@ OPENAI_MAX_TOKENS = 8192
 
 class AIError(RuntimeError):
     """The AI call failed or returned something unusable."""
+
+
+class BadAnswer(AIError):
+    """The AI answered, but not with a usable JSON object. Asking again
+    usually works, unlike a refused key or an unreachable server."""
 
 
 @dataclass(frozen=True)
@@ -243,9 +253,12 @@ def parse_json(raw: str) -> dict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise AIError(f"The AI did not answer with valid JSON: {text[:200]!r}") from exc
+        # Show where it broke: the start of a long answer is usually fine.
+        near = text[max(0, exc.pos - 120):exc.pos + 80]
+        raise BadAnswer(f"The AI did not answer with valid JSON ({exc.msg} at character "
+                      f"{exc.pos} of {len(text)}, near {near!r}).") from exc
     if not isinstance(data, dict):
-        raise AIError("The AI answered with JSON that is not an object.")
+        raise BadAnswer("The AI answered with JSON that is not an object.")
     return data
 
 
@@ -275,7 +288,7 @@ def _claude(config: AIConfig, system: str, user: str, schema: dict,
         reason = getattr(details, "explanation", None) or "no reason given"
         raise AIError(f"Claude declined this request ({reason}).")
     if message.stop_reason == "max_tokens":
-        raise AIError("The AI's answer was too long and got cut off.")
+        raise BadAnswer("The AI's answer was too long and got cut off.")
     text = next((b.text for b in message.content if b.type == "text"), "")
     return parse_json(text)
 
@@ -339,28 +352,47 @@ class _Retryable(AIError):
     """A failure another model might not have: rate limit, overload, timeout."""
 
 
+def response_format(provider: str, schema: dict) -> tuple[dict, str]:
+    """The response_format field and the extra instructions for `provider`.
+
+    Servers that enforce a JSON schema (strict structured output) get it: in
+    plain JSON mode Qwen 3.8 sometimes answered a transcript with an empty
+    candidate list or a broken object (1 in 5 replays of a failed run), and
+    with the schema enforced every replay came back complete. Servers that
+    only offer JSON mode get the schema spelled out in the instructions, and
+    the answer is validated either way."""
+    if PROVIDERS.get(provider, {}).get("json_schema"):
+        return ({"type": "json_schema",
+                 "json_schema": {"name": "answer", "strict": True, "schema": schema}},
+                "Reply with one JSON object only.")
+    return ({"type": "json_object"},
+            f"Reply with one JSON object only, matching this JSON schema exactly:\n"
+            f"{json.dumps(schema)}")
+
+
 def _openai_request(config: AIConfig, system: str, user: str, schema: dict,
                     max_tokens: int) -> dict:
-    # Not every OpenAI-compatible server enforces a JSON schema, so the schema
-    # is also spelled out in the instructions and the answer is validated.
-    instructions = (f"{system}\n\nReply with one JSON object only, matching this "
-                    f"JSON schema exactly:\n{json.dumps(schema)}")
+    fmt, rule = response_format(config.provider, schema)
     headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
     try:
         response = httpx.post(
             f"{config.base_url}/chat/completions",
             headers=headers,
             json={"model": config.model,
-                  "messages": [{"role": "system", "content": instructions},
+                  "messages": [{"role": "system", "content": f"{system}\n\n{rule}"},
                                {"role": "user", "content": user}],
-                  "response_format": {"type": "json_object"},
+                  "response_format": fmt,
                   # Claude takes 64000; most OpenAI-compatible servers cap at 8192.
                   "max_tokens": min(max_tokens, OPENAI_MAX_TOKENS),
                   **_thinking_off(config.provider)},
             timeout=600.0,
         )
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
+        choice = response.json()["choices"][0]
+        content = choice["message"]["content"]
+        if choice.get("finish_reason") == "length":
+            raise BadAnswer(f"{config.model}'s answer was too long and got cut off "
+                          f"after {OPENAI_MAX_TOKENS} tokens.")
     except httpx.ConnectError as exc:
         # The OS's own text for this is often localized and garbled on Windows.
         raise AIError(f"Could not reach the {config.provider} server at {config.base_url}. "
@@ -375,6 +407,138 @@ def _openai_request(config: AIConfig, system: str, user: str, schema: dict,
     except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
         raise AIError(f"The {config.provider} request failed: {exc}") from exc
     return parse_json(content)
+
+
+_IMAGE_REFUSED = re.compile(r"image|vision|multimodal|image_url|content type", re.I)
+
+
+class ToolChat:
+    """A conversation in which the model may call tools, for either API
+    family: Claude's tool_use blocks or the OpenAI-style tool_calls every
+    other provider here speaks. `tools` is [{"name", "description",
+    "parameters" (JSON schema)}]. Each `step()` returns the model's text and
+    its tool calls [{"id", "name", "arguments"}]; answer them with `reply()`."""
+
+    def __init__(self, config: AIConfig, system: str, tools: list[dict]) -> None:
+        self.config, self.system, self.tools = config, system, tools
+        self.claude = PROVIDERS[config.provider]["kind"] == "anthropic"
+        self.messages: list[dict] = []
+        self.vision = True  # until the provider refuses an image
+
+    def say(self, text: str) -> None:
+        self.messages.append({"role": "user", "content": text})
+
+    def step(self, max_tokens: int = 4000) -> tuple[str, list[dict]]:
+        run = self._claude_step if self.claude else self._openai_step
+        try:
+            return run(max_tokens)
+        except AIError as exc:
+            # A text-only model rejects the frames: retry once without them.
+            if _IMAGE_REFUSED.search(str(exc)) and self._blind():
+                return run(max_tokens)
+            raise
+
+    def reply(self, results: list[tuple[str, str | list[dict]]]) -> None:
+        """Tool results as (call id, content), in the order they were called.
+        Content is text, or blocks: {"type": "text", "text"} and
+        {"type": "image", "jpeg": <base64>} (frames for a vision model)."""
+        blocks = {cid: [{"type": "text", "text": c}] if isinstance(c, str) else c
+                  for cid, c in results}
+        if not self.vision:  # this model was found blind: say so instead
+            blocks = {cid: [b if b["type"] == "text" else
+                            {"type": "text", "text": "(A frame was taken, but this model "
+                                                     "cannot see images.)"} for b in bs]
+                      for cid, bs in blocks.items()}
+        if self.claude:
+            self.messages.append({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": cid, "content": [
+                    {"type": "text", "text": b["text"]} if b["type"] == "text" else
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                 "data": b["jpeg"]}} for b in bs]}
+                for cid, bs in blocks.items()]})
+            return
+        # OpenAI-style tool messages carry text only: frames follow in one
+        # user message right after them.
+        images = []
+        for cid, bs in blocks.items():
+            self.messages.append({"role": "tool", "tool_call_id": cid, "content": "\n".join(
+                b["text"] for b in bs if b["type"] == "text") or "(image below)"})
+            images += [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b['jpeg']}"}}
+                       for b in bs if b["type"] == "image"]
+        if images:
+            self.messages.append({"role": "user", "content": [
+                {"type": "text", "text": "The frames from those tool calls, in order:"}, *images]})
+
+    def _blind(self) -> bool:
+        """After the provider refused images: drop them and carry on without."""
+        if not self.vision:
+            return False
+        self.vision = False
+        note = "(Frames were attached here, but this model cannot see images.)"
+        for message in self.messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                message["content"] = [
+                    b for b in content if b.get("type") not in ("image", "image_url")] or note
+                for block in content:
+                    if isinstance(block, dict) and isinstance(block.get("content"), list):
+                        block["content"] = [x for x in block["content"] if x.get("type") != "image"
+                                            ] or [{"type": "text", "text": note}]
+        return True
+
+    def _claude_step(self, max_tokens: int) -> tuple[str, list[dict]]:
+        try:
+            message = _anthropic_client(self.config).messages.create(
+                model=self.config.model, max_tokens=max_tokens, system=self.system,
+                messages=self.messages,
+                tools=[{"name": t["name"], "description": t["description"],
+                        "input_schema": t["parameters"]} for t in self.tools])
+        except Exception as exc:  # noqa: BLE001 - SDK errors surface as one AIError
+            raise AIError(_claude_failure(exc)) from exc
+        blocks = [b.model_dump() for b in message.content]
+        self.messages.append({"role": "assistant", "content": blocks})
+        text = "".join(b.get("text", "") for b in blocks if b["type"] == "text")
+        calls = [{"id": b["id"], "name": b["name"], "arguments": b.get("input") or {}}
+                 for b in blocks if b["type"] == "tool_use"]
+        return text, calls
+
+    def _openai_step(self, max_tokens: int) -> tuple[str, list[dict]]:
+        config = self.config
+        headers = {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+        body = {"model": config.model,
+                "messages": [{"role": "system", "content": self.system}, *self.messages],
+                "tools": [{"type": "function", "function": t} for t in self.tools],
+                "max_tokens": min(max_tokens, OPENAI_MAX_TOKENS),
+                **_thinking_off(config.provider)}
+        try:
+            for attempt in range(3):
+                response = httpx.post(f"{config.base_url}/chat/completions", headers=headers,
+                                      json=body, timeout=300.0)
+                if response.status_code not in RETRY_STATUS or attempt == 2:
+                    break
+                time.sleep(4 * (attempt + 1))
+            response.raise_for_status()
+            message = response.json()["choices"][0]["message"]
+        except httpx.HTTPStatusError as exc:
+            raise AIError(f"The {config.provider} request failed "
+                          f"({exc.response.status_code}): {exc.response.text[:300]}") from exc
+        except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+            raise AIError(f"The {config.provider} request failed: {exc}") from exc
+        calls = []
+        for call in message.get("tool_calls") or []:
+            raw = (call.get("function") or {}).get("arguments") or "{}"
+            try:
+                args = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            except ValueError:
+                args = {"_unreadable": raw}
+            calls.append({"id": call.get("id") or f"call_{len(calls)}",
+                          "name": (call.get("function") or {}).get("name", ""),
+                          "arguments": args if isinstance(args, dict) else {}})
+        kept = {"role": "assistant", "content": message.get("content") or ""}
+        if message.get("tool_calls"):
+            kept["tool_calls"] = message["tool_calls"]
+        self.messages.append(kept)
+        return message.get("content") or "", calls
 
 
 def complete_json(config: AIConfig, system: str, user: str, schema: dict,

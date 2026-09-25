@@ -2,7 +2,8 @@
 
 `edit.json` is the structured half, which the default editor applies;
 `prompt.md` is the same plus the style notes and the clip's words, written
-for an AI editor (the clipper skill, or later an MCP video tool).
+for an AI editor (the clipper skill). The built-in AI director
+(clipper.director) adds motion graphics on top.
 """
 from __future__ import annotations
 

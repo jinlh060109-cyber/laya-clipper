@@ -1,10 +1,19 @@
 """The typed questions Laya answers for every candidate clip.
 
-Four built-in questions are always asked; the AI adds up to six of its own,
-written for this particular video. Laya's three answer types are `score`
+Two layers of questions. The fixed layer (FIXED) is asked about every clip;
+the variable layer is up to six questions the AI writes for this video. Laya's three answer types are `score`
 (pick one of k levels), `choice` (pick one option) and `noul` (yes/no).
 A question and its options share 192 of Laya's 512 tokens, so levels,
 options and their wording are kept short.
+
+Yes/no questions are written as `noul` but sent to Laya as a two-option
+`choice` with neutral keys, A = yes and B = no (`as_laya`). Laya's noul reads
+its two options as `false:`/`true:`, and on the English checkpoint that label
+pair outweighs the clip (laya issue #156): over 13 clips of one real run,
+"ends cleanly" as a noul stayed between 0.39 and 0.54 (spread 0.04), while the
+same question as an A/B choice ranged 0.35-0.80 (spread 0.13) and followed
+the clips that really end mid-thought. The answer is still graded as the
+probability of yes.
 """
 from __future__ import annotations
 
@@ -14,8 +23,16 @@ VALID_TYPES = ("score", "choice", "noul")
 MAX_AI_QUESTIONS = 6
 MAX_TEXT = 160  # characters per instruction or option
 
-BUILTIN: dict[str, dict] = {
+# The fixed layer: asked about every clip of every video, worded the same
+# way each time. Laya reads each question against one of two states (`reads`,
+# never sent to Laya): "clip" is the clip's whole text; "edges" is only its
+# opening and closing sentence. Judged on the whole text, "does it start and
+# end cleanly" were no better than chance on 18 hand-labelled clips of a real
+# video (AUC 0.48 and 0.29: the rest of the text drowns the two sentences
+# that decide it); on the edges alone the same checks reached 0.76 and 0.71.
+FIXED: dict[str, dict] = {
     "clipworthy": {
+        "reads": "clip",
         "type": "score",
         "instructions": ("How likely a stranger scrolling past would stop and watch this "
                          "segment, judged on the segment itself rather than the surrounding "
@@ -29,33 +46,40 @@ BUILTIN: dict[str, dict] = {
         ],
     },
     "hook_strength": {
+        "reads": "edges",
         "type": "score",
-        "instructions": ("How well the FIRST sentence of this segment works as the opening "
-                         "line of a short video. Judge only the opening, not the whole segment."),
+        "instructions": "How well opening_sentence works as the first line of a short video.",
         "criteria": [
-            "Dead open. Filler words, logistics, or mid-admin chatter.",
-            "Slow. Understandable but gives no reason to keep watching.",
+            "Dead open. Filler, logistics or chatter.",
+            "Slow. Understandable, but no reason to keep watching.",
             "Adequate. States something concrete.",
-            "Strong. A claim, question, or image that demands the next sentence.",
+            "Strong. A claim, question or image that demands the next sentence.",
             "Arresting. Impossible to scroll past.",
         ],
     },
-    "self_contained": {
+    "has_start": {
+        "reads": "edges",
         "type": "noul",
-        "instructions": "This segment is understandable to someone who has heard nothing before it.",
-        "criteria": {"true": "A new listener follows it completely.",
-                     "false": "A new listener would be lost or confused."},
+        "instructions": ("Does opening_sentence introduce its own topic, instead of continuing "
+                         "something said before?"),
+        "criteria": {"true": "It opens a topic: a question, a claim or a scene a newcomer can follow.",
+                     "false": ("It continues: an answer, 'this', 'that means', 'with this', "
+                               "'well' referring to earlier talk.")},
     },
-    "ends_cleanly": {
+    "has_end": {
+        "reads": "edges",
         "type": "noul",
-        "instructions": "The thought reaches a natural conclusion before the segment ends.",
-        "criteria": {"true": "The point lands and completes.",
-                     "false": "It cuts off mid-thought or trails away."},
+        "instructions": "Is closing_sentence a conclusion?",
+        "criteria": {"true": "Yes: a final result, answer, number or joke.",
+                     "false": "No: a step in the middle, a setup, or a new question."},
     },
 }
-BUILTIN_WEIGHTS = {"clipworthy": 0.40, "hook_strength": 0.25,
-                   "self_contained": 0.10, "ends_cleanly": 0.05}
+FIXED_WEIGHTS = {"clipworthy": 0.30, "hook_strength": 0.20, "has_start": 0.15, "has_end": 0.15}
+# The variable layer: the AI's own questions for this video share the rest.
 AI_SHARE = 0.20
+# Below this, the fixed layer flags a clip as starting or ending mid-thought.
+EDGE_FLAG_BELOW = 0.40
+YES, NO = "A", "B"
 
 
 def _slug(text: str) -> str:
@@ -108,7 +132,7 @@ def from_ai(items: list[dict]) -> tuple[dict, list[str]]:
             dropped.append("A question was not an object.")
             continue
         qid = _slug(item.get("id"))
-        if qid in BUILTIN:
+        if qid in FIXED:
             qid = f"ai_{qid}"
         base, n = qid, 2
         while qid in kept:
@@ -125,16 +149,39 @@ def from_ai(items: list[dict]) -> tuple[dict, list[str]]:
     return kept, dropped
 
 
+def as_laya(question: dict) -> dict:
+    """The question as Laya is asked it: a yes/no becomes an A/B choice."""
+    if question.get("type") != "noul":
+        return question
+    crit = question.get("criteria") or {}
+    return {"type": "choice", "instructions": question["instructions"],
+            "criteria": {YES: f"Yes. {crit.get('true', 'It does.')}",
+                         NO: f"No. {crit.get('false', 'It does not.')}"}}
+
+
+def reads(question: dict) -> str:
+    """Which state Laya reads for this question: "clip" or "edges"."""
+    return question.get("reads", "clip")
+
+
+def laya_questions(questions: dict) -> dict:
+    """The questions as Laya is asked them (without the app's own fields)."""
+    return {qid: as_laya({k: v for k, v in question.items() if k != "reads"})
+            for qid, question in questions.items()}
+
+
 def combined_weights(ai_weights: dict, ai_questions: dict) -> dict[str, float]:
-    """Weights for the score: built-ins keep their shares and the AI's own
-    score/yes-no questions split the rest. Choice answers describe a clip
+    """Weights for the score: the fixed layer keeps its shares and the AI's
+    own score/yes-no questions split the rest. Choice answers describe a clip
     rather than grade it, so they carry no weight."""
     graded = [qid for qid, q in ai_questions.items() if q["type"] in ("score", "noul")]
     if not graded:
-        total = sum(BUILTIN_WEIGHTS.values())
-        return {qid: w / total for qid, w in BUILTIN_WEIGHTS.items()}
-    raw = {qid: max(0.0, float(ai_weights.get(qid, 0) or 0)) for qid in graded}
+        total = sum(FIXED_WEIGHTS.values())
+        return {qid: w / total for qid, w in FIXED_WEIGHTS.items()}
+    # A question renamed to avoid a fixed id (ai_...) keeps its weight.
+    raw = {qid: max(0.0, float(ai_weights.get(qid, ai_weights.get(qid.removeprefix("ai_"), 0)) or 0))
+           for qid in graded}
     if sum(raw.values()) <= 0:
         raw = {qid: 1.0 for qid in graded}
     total = sum(raw.values())
-    return {**BUILTIN_WEIGHTS, **{qid: AI_SHARE * w / total for qid, w in raw.items()}}
+    return {**FIXED_WEIGHTS, **{qid: AI_SHARE * w / total for qid, w in raw.items()}}

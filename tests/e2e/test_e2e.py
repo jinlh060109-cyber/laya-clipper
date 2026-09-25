@@ -183,12 +183,49 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(artifacts, page, 
     assert page.is_hidden("#ai-pending")
     assert creds["key"] not in page.content()  # the key never comes back to the page
 
+    # The AI wrote its own Laya questions (guided by the built-in skill), and
+    # the page shows how Laya decided: every question, its range, Laya's
+    # probabilities, value and share of the score, adding up to the score.
+    segments = json.loads((run / "segments.json").read_text(encoding="utf-8"))
+    ai_questions = [qid for qid in segments["questions"]
+                    if qid not in ("clipworthy", "hook_strength", "has_start", "has_end")]
+    assert ai_questions, "the AI wrote no Laya questions"
+    assert not segments["problems"], segments["problems"]
+    # The second AI call checked every clip's start and end.
+    assert segments.get("boundary_error") is None, segments.get("boundary_error")
+    checked = [c for c in segments["candidates"] if c.get("boundary")]
+    assert checked, "the boundary check judged no clip"
+    scored = json.loads((run / "scored.json").read_text(encoding="utf-8"))["candidates"]
+    assert all({"has_start", "has_end", "hook_strength"} <= set(c["answers"]) for c in scored
+               if not c.get("failed"))
+    artifacts.note(boundaries=[{"id": c["id"], **c["boundary"]} for c in checked],
+                   edge_flags={c["id"]: c.get("flags") for c in scored})
+    assert page.is_hidden("#rows tr.laya-detail")
+    page.check("#laya-details")
+    first = page.locator("#rows tr.laya-detail").first
+    assert first.is_visible()
+    shown = first.locator(".laya-q tbody tr").count() - 1  # minus the total row
+    clip0 = json.loads((run / "selection.json").read_text(encoding="utf-8"))["clips"][0]
+    assert shown == len(clip0["answers"]) == len(segments["questions"])
+    for qid, answer in clip0["answers"].items():
+        assert abs(sum(answer["probabilities"].values()) - 1) < 0.02, (qid, answer)
+    parts = sum(a["weight"] * a["normalized"] for a in clip0["answers"].values()
+                if a["weight"] and a["normalized"] is not None)
+    assert abs(parts - clip0["score"]) < 0.002, (parts, clip0["score"])
+    assert "Laya " in page.inner_text("#laya-model")
+    artifacts.save_bytes("laya-decisions.png", first.screenshot())
+    artifacts.note(laya_questions={qid: segments["questions"][qid] for qid in ai_questions},
+                   laya_weights=segments["weights"])
+
     # AI fill-in on one clip writes the title into the edit.
     boxes, fills = page.locator("#rows .include"), page.locator("#rows .fill")
     for i in range(boxes.count()):
         boxes.nth(i).set_checked(i == 0)
         fills.nth(i).set_checked(i == 0)
     page.select_option("#caption_style", "neon")
+    # The AI director: an agent that looks at the clip and adds Remotion graphics.
+    assert not page.is_disabled("#director"), page.inner_text("#director-hint")
+    page.check("#director")
     page.click("#make")
     _finish(page, "#done", MAKE_TIMEOUT)
     spec = json.loads(next((run / "clips").glob("*/edit.json")).read_text(encoding="utf-8"))
@@ -200,6 +237,19 @@ def test_ai_provider_is_chosen_on_the_page_and_drives_analysis(artifacts, page, 
     assert abs(duration - spec["duration"]) < 0.5  # zooms never change the length
     ass = (final.parent / "captions.ass").read_text(encoding="utf-8")
     assert spec["hook"] and ",Title," in ass  # the AI's hook is on screen first
+    log = json.loads((final.parent / "director.json").read_text(encoding="utf-8"))
+    tools = [c["tool"] for c in log["calls"]]
+    assert "look" in tools and "render" in tools, tools  # it looked before it rendered
+    if log["rendered"]:
+        assert (final.parent / "final_plain.mp4").exists()
+        assert abs(float(ffprobe(final)["format"]["duration"]) - spec["duration"]) < 0.5
+    card = page.locator(".result").first.inner_text()
+    assert "AI director" in card, card
+    artifacts.note(director_tools=tools, director_graphics=log["graphics"],
+                   director_summary=log["summary"], director_seconds=log["seconds"],
+                   director_vision=log["vision"])
+
+
     artifacts.note(provider=creds["provider"], model=creds["model"], title=spec["title"],
                    hook=spec["hook"], punch_ins=[p["at"] for p in spec["punch_ins"]],
                    timings=json.loads((run / "job.json").read_text(encoding="utf-8")).get("timings"))

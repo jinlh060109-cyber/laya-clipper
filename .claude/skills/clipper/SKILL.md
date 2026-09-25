@@ -50,7 +50,8 @@ Grab two or three frames (`ffmpeg -ss T -i edited.mp4 -frames:v 1 f.png`)
 around each punch-in and the first second, look at them, and confirm the
 duration with ffprobe. Report what you applied and anything you skipped.
 
-## Later
+## Motion graphics
 
-An MCP video server (for example kyanitelabs/mcp-video) can replace the raw
-ffmpeg calls; the input folder and the output name stay the same.
+For animated graphics (counters, kinetic text, lower thirds), use the app's
+built-in AI director instead (`clipper make ... --director`); it renders them
+with Remotion and keeps the plain edit as `final_plain.mp4`.

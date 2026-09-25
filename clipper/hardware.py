@@ -76,7 +76,7 @@ def probe_encoders(ffmpeg: str) -> list[str]:
                "-i", "color=c=black:s=256x256:d=0.1", "-frames:v", "1",
                "-c:v", name, "-f", "null", "-"]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True,
+            result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                     timeout=20, check=False)
         except (OSError, subprocess.TimeoutExpired):
             continue

@@ -1,0 +1,25 @@
+{
+  "name": "jev-clipper-remotion",
+  "private": true,
+  "description": "Motion graphics the AI director places on clips. Rendered by clipper/director.py through render.mjs.",
+  "type": "module",
+  "scripts": {
+    "bundle": "remotion bundle src/index.tsx --out-dir=build",
+    "studio": "remotion studio src/index.tsx"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.528",
+    "@remotion/cli": "4.0.528",
+    "@remotion/renderer": "4.0.528",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.528"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "7.0.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}

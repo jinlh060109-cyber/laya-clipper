@@ -1,5 +1,8 @@
 """Steps 3-4: the AI reads the whole transcript once and proposes clips.
 
+A second, small AI call (clipper.boundaries) then checks that each clip has
+a real start and end, and moves it to sentences that give it both.
+
 One call per video returns the kind of video, the candidate clips (start and
 end on the transcript's timestamps) and the typed questions Laya should
 answer about each clip. Everything the AI returns is checked: boundaries are
@@ -12,11 +15,12 @@ from __future__ import annotations
 
 import math
 
-from clipper import questions as q
-from clipper.ai import AIConfig, AIError, complete_json
+from clipper import boundaries, questions as q
+from clipper.ai import AIConfig, AIError, BadAnswer, complete_json
 from clipper.captions import join_words
 from clipper.run import Run
 from clipper.silence import speech_only
+from clipper.skills import body as skill
 
 CONTENT_TYPES = ("podcast", "interview", "talking_head", "tutorial", "lecture",
                  "comedy", "stream", "gaming", "vlog", "news", "other")
@@ -65,37 +69,47 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
-SYSTEM = f"""You are the editor who picks short clips from a long video.
+SYSTEM = f"""You are a short-form video editor. From one long video's
+transcript you pick the moments worth posting as vertical clips (TikTok,
+Reels, Shorts), and you tell a small rating model, Laya, what to look for in
+them. The app then has Laya rate every clip you propose and ranks them.
 
-You get the video's full transcript, one line per stretch of speech, each
-starting with [start-end] in seconds. Do three things in one answer:
+The transcript has one line per stretch of speech, each starting with
+[start-end] in seconds from the start of the video. The viewer's goal, when
+given, overrides your own taste: pick for it and ask Laya about it.
 
-1. content_type: what kind of video this is.
-2. candidates: the moments worth posting as short clips. For each, give start
-   and end in seconds taken from the transcript's timestamps, a short
-   category (for example tip, story, joke, insight, reveal, rant), why it
-   works (reason), and the line a viewer would hear first (hook_line).
-   - Each clip is 15-60 seconds and at most about 150 words. A separate model
-     with a 512-token window reads each clip; longer clips get cut off before
-     it has read them.
-   - Start on the strongest line, not on a wind-up. End when the thought
-     lands. Start and end on sentence boundaries.
-   - Clips never overlap. Propose 5-25, more for longer videos, best first.
-   - Every clip must make sense to someone who has not seen the video.
-3. questions: up to 6 typed questions that a small decision model will
-   answer about every clip, written for this video (the model already asks
-   how clip-worthy the clip is, how strong its first line is, whether it
-   stands alone and whether it ends cleanly, so ask about what matters for
-   this kind of video: for a tutorial, whether the tip is concrete; for
-   comedy, whether the joke lands). Types:
-   - score: fill `levels` with 3-5 short descriptions from worst to best.
-   - choice: fill `choices` with 2-6 options (key + description).
-   - noul: a yes/no statement; fill `true_means` and `false_means`.
-   Leave the fields a type does not use empty. Keep every text under
-   {q.MAX_TEXT} characters. weights: how much each score or noul question
-   should count (any positive numbers; they are rescaled).
+Answer with one JSON object:
 
-If the viewer's goal is given, let it decide which moments you pick."""
+content_type: the kind of video, from the allowed list.
+
+summary: one or two sentences on what the video is about, for the person
+choosing clips.
+
+candidates: the clips, best first.
+- start and end are seconds copied from the transcript's timestamps. Start
+  on the first word of a sentence and end on the last word of one.
+- 15-60 seconds and at most 150 words each. Laya reads at most about 220
+  words; anything past that is not rated.
+- Open on the strongest line: a claim, a question, a surprise, the start of
+  the story. Cut the wind-up ("so", "anyway", "like I said") before it.
+- End right after the payoff: the punchline, the answer, the lesson. Do not
+  run into the next topic.
+- Each clip must make sense to someone who has not seen the rest of the
+  video. If it needs one earlier sentence of setup, start there.
+- Clips never overlap. Propose 5-25: more for longer or denser videos,
+  fewer for a short one. Skip greetings, sponsor reads, housekeeping and
+  outros unless the viewer's goal asks for them.
+- category: one or two words (tip, story, joke, insight, reveal, rant,
+  reaction, how-to...). reason: one sentence on why a stranger would watch
+  it. hook_line: the first sentence of the clip, word for word.
+
+questions and weights: up to 6 typed questions Laya answers about every
+clip, written for this video, and a weight for each score or noul question.
+Follow the guide below exactly. For every question fill all fields: the ones
+its type does not use are empty (""/[]). Keep every text under {q.MAX_TEXT}
+characters.
+
+{skill("laya_questions")}"""
 
 
 def _words(transcript: dict) -> list[dict]:
@@ -190,8 +204,32 @@ def fallback_candidates(transcript: dict, duration: float) -> list[dict]:
 
 def _without_ai(transcript: dict, duration: float, error: str | None) -> dict:
     return {"content_type": "unknown", "summary": "", "ai": None, "ai_error": error,
-            "questions": dict(q.BUILTIN), "weights": q.combined_weights({}, {}),
+            "questions": dict(q.FIXED), "weights": q.combined_weights({}, {}),
             "candidates": fallback_candidates(transcript, duration), "problems": []}
+
+
+ATTEMPTS = 2
+
+
+def _ask(config: AIConfig, system: str, user: str, words: list[dict], duration: float,
+         complete) -> tuple[dict, list[dict]]:
+    """The AI's answer and its clips on real word boundaries. An answer that
+    is broken or holds no usable clip is asked for once more: the same
+    request usually comes back whole the second time. A refused key or an
+    unreachable server is not retried."""
+    problem = ""
+    for _ in range(ATTEMPTS):
+        try:
+            answer = complete(config, system, user, SCHEMA, 64000)
+        except BadAnswer as exc:
+            problem = str(exc)
+            continue
+        candidates = snap(answer.get("candidates") or [], words, duration)
+        if candidates:
+            return answer, candidates
+        problem = (f"The AI proposed no usable clips ({len(answer.get('candidates') or [])} "
+                   f"proposed; all too short or off the transcript).")
+    raise AIError(f"{problem} Asked {ATTEMPTS} times.")
 
 
 def run_segment(run: Run, config: AIConfig | None, user_prompt: str = "",
@@ -208,25 +246,32 @@ def run_segment(run: Run, config: AIConfig | None, user_prompt: str = "",
     else:
         system, user = build_prompt(transcript, duration, user_prompt)
         try:
-            answer = complete(config, system, user, SCHEMA, 64000)
-            candidates = snap(answer.get("candidates") or [], words, duration)
-            if not candidates:
-                raise AIError("The AI proposed no usable clips (all too short or off the transcript).")
+            answer, candidates = _ask(config, system, user, words, duration, complete)
         except AIError as exc:
             result = _without_ai(transcript, duration, str(exc))
         else:
+            content_type = answer.get("content_type")
+            content_type = content_type if content_type in CONTENT_TYPES else "other"
+
+            def rebuild(start: float, end: float, old: dict) -> dict:
+                # hook_line was the old first sentence; the new one is in text.
+                return {"id": old["id"], **_clip(start, end, words, category=old["category"],
+                                                 reason=old["reason"], hook_line="")}
+
+            candidates, boundary_error = boundaries.check(
+                config, candidates, words, content_type, rebuild, complete)
             ai_questions, problems = q.from_ai(answer.get("questions") or [])
             weights = {str(w.get("question_id")): w.get("weight")
                        for w in answer.get("weights") or [] if isinstance(w, dict)}
             weights = {q._slug(k): v for k, v in weights.items()}
-            content_type = answer.get("content_type")
             result = {
-                "content_type": content_type if content_type in CONTENT_TYPES else "other",
+                "content_type": content_type,
                 "summary": str(answer.get("summary") or ""),
                 "ai": config.describe(), "ai_error": None,
-                "questions": {**q.BUILTIN, **ai_questions},
+                "questions": {**q.FIXED, **ai_questions},
                 "weights": q.combined_weights(weights, ai_questions),
                 "candidates": candidates, "problems": problems,
+                "boundary_error": boundary_error,
             }
     run.write_json("segments.json", result)
     return result

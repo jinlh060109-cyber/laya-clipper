@@ -79,7 +79,7 @@ def probe_source(ffprobe: Path, video: Path) -> dict:
     result = subprocess.run(
         [str(ffprobe), "-v", "error", "-print_format", "json",
          "-show_format", "-show_streams", str(video)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed on {video}:\n{ffmpeg_tail(result.stderr)}")
@@ -103,7 +103,7 @@ def extract_audio(ffmpeg: Path, video: Path, dest: Path) -> None:
              # The temp name ends in .tmp, which ffmpeg cannot map to a
              # muxer, so the container has to be named explicitly.
              "-f", "wav", str(tmp)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
         )
         if result.returncode != 0:
             raise RuntimeError(f"Audio extraction failed:\n{ffmpeg_tail(result.stderr)}")
@@ -125,7 +125,7 @@ def per_second_rms(ffmpeg: Path, wav: Path, duration: float) -> list[float]:
          "-af", "aresample=16000,asetnsamples=n=16000:p=0,"
                 "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
          "-f", "null", "-"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(f"RMS extraction failed on {wav}:\n{ffmpeg_tail(result.stderr)}")

@@ -39,8 +39,11 @@ def _questions(questions) -> dict:
 
 def used_buckets(questions) -> set[str]:
     """The temperature buckets these questions actually reach."""
+    from clipper.questions import laya_questions
+
     out: set[str] = set()
-    for q in _questions(questions).values():
+    # What Laya is actually asked: yes/no questions go as two-option choices.
+    for q in laya_questions(_questions(questions)).values():
         qtype = q.get("type")
         crit = q.get("criteria")
         if qtype == "score":

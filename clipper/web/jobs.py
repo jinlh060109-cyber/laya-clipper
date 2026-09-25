@@ -205,4 +205,7 @@ class JobRunner:
             run, chosen, self._reporter(job, "fillin")))
         done = self._step(job, "edit", lambda: steps.edit(
             run, chosen, fills, self._reporter(job, "edit")))
+        if chosen.get("director"):
+            done = self._step(job, "director", lambda: steps.director(
+                run, chosen, done, self._reporter(job, "director")))
         return {"clips": done}

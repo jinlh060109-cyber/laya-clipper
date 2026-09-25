@@ -88,7 +88,7 @@ def final_command(ffmpeg, source: Path, start: float, end: float, output: Path,
 
 
 def _ffmpeg(cmd: list[str], output: Path, cwd: Path | None = None) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+    result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
                             errors="replace", check=False, cwd=cwd)
     if result.returncode != 0:
         output.unlink(missing_ok=True)  # never leave a half-written clip behind
@@ -120,7 +120,7 @@ def preview_frame(run: Run, clip_id: str, style: dict, ffmpeg=None) -> bytes:
         cmd = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-ss", f"{at:.3f}",
                "-i", str(Path(source_meta["path"]).resolve()), "-frames:v", "1",
                "-vf", vf, "-f", "image2", "-c:v", "mjpeg", "-q:v", "4", "pipe:1"]
-        result = subprocess.run(cmd, capture_output=True, check=False, cwd=cwd)
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, check=False, cwd=cwd)
         if result.returncode != 0 or not result.stdout:
             raise RuntimeError("Could not render the preview:\n"
                                + ffmpeg_tail(result.stderr.decode("utf-8", "replace")))
