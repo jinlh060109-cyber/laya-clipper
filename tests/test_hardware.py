@@ -69,6 +69,33 @@ def test_detect_lists_every_device_and_explains_missing_ones():
     assert enc["auto"]["detail"] == "Intel Quick Sync"
 
 
+def test_a_working_qsv_encoder_reveals_an_intel_gpu_a_cpu_torch_hides():
+    """The case this machine actually hit: ffmpeg encodes with Quick Sync, so
+    an Intel GPU is present, but a CPU-only torch build cannot use it."""
+    info = hardware.detect(gpus={"cuda": _gpu(None), "xpu": _gpu(None),
+                                 "mps": _gpu(None)},
+                           rocm=False, encoders=["h264_qsv"])
+    xpu = next(d for d in info["devices"] if d["id"] == "xpu")
+    assert not xpu["available"]
+    assert "GPU found (Intel Quick Sync works)" in xpu["detail"]
+    assert "torch" in xpu["detail"]
+
+
+def test_a_working_nvenc_encoder_reveals_an_nvidia_gpu_a_cpu_torch_hides():
+    """The fresh-clone NVIDIA case: plain PyPI torch on Windows is CPU-only,
+    but ffmpeg's NVENC probe proves the GPU is there."""
+    info = hardware.detect(gpus={"cuda": _gpu(None), "xpu": _gpu(None),
+                                 "mps": _gpu(None)},
+                           rocm=False, encoders=["h264_nvenc"])
+    cuda = next(d for d in info["devices"] if d["id"] == "cuda")
+    assert not cuda["available"]
+    assert "GPU found (NVIDIA NVENC works)" in cuda["detail"]
+    assert "torch" in cuda["detail"]
+    # No QSV evidence: the Intel entry must stay a plain "Not found".
+    xpu = next(d for d in info["devices"] if d["id"] == "xpu")
+    assert xpu["detail"] == "Not found"
+
+
 def test_amd_on_rocm_is_labelled_as_amd():
     info = hardware.detect(gpus={"cuda": _gpu("AMD Radeon RX 7900 XTX"), "xpu": _gpu(None),
                                  "mps": _gpu(None)}, rocm=True, encoders=[])

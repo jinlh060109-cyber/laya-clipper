@@ -24,6 +24,9 @@ ENCODERS: tuple[tuple[str, str, str], ...] = (
     ("libx264", "libx264", "Software (x264)"),
 )
 _BY_ID = {eid: (name, label) for eid, name, label in ENCODERS}
+# A hardware encoder whose test encode succeeded proves that GPU is present,
+# whatever torch says: Quick Sync -> Intel, NVENC -> NVIDIA, AMF -> AMD.
+_GPU_EVIDENCE = {"xpu": "qsv", "cuda": "nvenc", "mps": "videotoolbox"}
 _QUALITY = {
     "libx264": ["-preset", "medium", "-crf", "20"],
     "h264_nvenc": ["-preset", "p5", "-rc", "vbr", "-cq", "21", "-b:v", "0"],
@@ -137,20 +140,6 @@ def detect(gpus: dict[str, Callable[[], str | None]] | None = None,
     rocm = is_rocm() if rocm is None else rocm
     found = {kind: probe() for kind, probe in gpus.items()}
 
-    devices = []
-    for kind in ("cuda", "xpu", "mps"):
-        label = "AMD GPU (ROCm)" if kind == "cuda" and rocm else DEVICE_LABELS[kind]
-        name = found.get(kind)
-        devices.append({"id": kind, "label": label, "available": bool(name),
-                        "detail": name or "Not found",
-                        "hint": "" if name else DEVICE_HINTS[kind]})
-    devices.append({"id": "cpu", "label": "CPU", "available": True,
-                    "detail": "Always available (slowest)", "hint": ""})
-    best = next((d for d in devices if d["available"]), devices[-1])
-    auto = {"id": "auto", "label": "Automatic", "available": True,
-            "detail": f"Uses {best['label']}" + (f": {best['detail']}" if best["id"] != "cpu" else ""),
-            "hint": ""}
-
     if encoders is None:
         # The same ffmpeg the renders use: FFMPEG_PATH, else the one on PATH.
         try:
@@ -159,6 +148,32 @@ def detect(gpus: dict[str, Callable[[], str | None]] | None = None,
         except Exception:  # noqa: BLE001 - no ffmpeg: software encoding is still listed
             encoders = []
     working = encoders
+
+    devices = []
+    for kind in ("cuda", "xpu", "mps"):
+        label = "AMD GPU (ROCm)" if kind == "cuda" and rocm else DEVICE_LABELS[kind]
+        name = found.get(kind)
+        # ffmpeg's own encoder probes can prove a GPU torch cannot see: a
+        # working Quick Sync / NVENC / AMF encoder means that GPU is there,
+        # and the missing torch build is the reason it is not offered (a
+        # plain `pip install torch` is CPU-only on Windows). Say that
+        # instead of "Not found", which reads as "no GPU in this machine".
+        detail = name
+        if name is None:
+            evidence = _GPU_EVIDENCE.get(kind)
+            if evidence and _BY_ID[evidence][0] in working:
+                detail = (f"GPU found ({_BY_ID[evidence][1]} works) but this torch "
+                          "build cannot use it: see the hint below to reinstall torch")
+        devices.append({"id": kind, "label": label, "available": bool(name),
+                        "detail": detail or "Not found",
+                        "hint": "" if name else DEVICE_HINTS[kind]})
+    devices.append({"id": "cpu", "label": "CPU", "available": True,
+                    "detail": "Always available (slowest)", "hint": ""})
+    best = next((d for d in devices if d["available"]), devices[-1])
+    auto = {"id": "auto", "label": "Automatic", "available": True,
+            "detail": f"Uses {best['label']}" + (f": {best['detail']}" if best["id"] != "cpu" else ""),
+            "hint": ""}
+
     enc = []
     for eid, name, label in ENCODERS:
         ok = name == "libx264" or name in working

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-09-25
+
+### Fixed
+- **GPU selection when torch is the wrong build.** The settings page said
+  "Not found" for a GPU the machine has, because a plain `pip install
+  torch` installs a CPU-only build on Windows (PyPI's default Windows
+  wheel; Linux gets CUDA by default). The device list now cross-checks
+  ffmpeg's own encoder probes: when Quick Sync, NVENC or VideoToolbox
+  encodes fine, that GPU is proven present, so the entry says the GPU was
+  found but this torch build cannot use it, with the matching
+  reinstall command as the hint — shown as a tooltip on the disabled
+  option and under the dropdown, in the page and in `clipper hardware`.
+
 ## 2026-09-24
 
 ### Added

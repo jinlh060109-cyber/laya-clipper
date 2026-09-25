@@ -294,8 +294,10 @@ const json = async (url, options) => {
 
 async function loadConfig() {
   config = await json("/api/config");
-  for (const d of config.hardware.devices)
+  for (const d of config.hardware.devices) {
     option($("device"), d.id, d.label + (d.available ? "" : " (not found)"), !d.available);
+    if (!d.available && d.hint) $("device").lastElementChild.title = d.hint;
+  }
   for (const e of config.hardware.encoders)
     option($("encoder"), e.id, e.label + (e.available ? "" : " (not available)"), !e.available);
   config.models.forEach((m) => option($("model"), m, m));
@@ -487,6 +489,7 @@ async function testAI() {
 function showDevice() {
   const d = config.hardware.devices.find((x) => x.id === $("device").value);
   $("device-detail").textContent = d ? (d.detail || "") : "";
+  $("device-detail").title = d && !d.available ? (d.hint || "") : "";
 }
 
 function applyStyle(s) {
